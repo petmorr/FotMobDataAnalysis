@@ -1,0 +1,230 @@
+"""Build tidy pandas tables of player and team stats from FotMob data.
+
+FotMob exposes league season stats as one leaderboard per stat. The
+:class:`DatasetBuilder` fetches every stat we care about, pivots the
+leaderboards into one row per player (or team), and enriches player rows with
+squad information (age, height, nationality, market value, position labels).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Iterable, Sequence
+
+import pandas as pd
+
+from fotmob_analytics import config
+from fotmob_analytics.client import FotMobClient, FotMobError
+
+logger = logging.getLogger(__name__)
+
+
+class DatasetBuilder:
+    def __init__(self, client: FotMobClient | None = None) -> None:
+        self.client = client or FotMobClient()
+
+    # -- players -------------------------------------------------------------
+
+    def league_player_table(
+        self,
+        league_id: int,
+        season: str | int | None = None,
+        stats: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """One row per player with all requested stats for a league season."""
+        season_id, season_name = self.client.resolve_season_id(league_id, season)
+        stat_names = list(stats) if stats is not None else config.all_template_metrics()
+
+        rows: dict[int, dict] = {}
+        for stat in stat_names:
+            try:
+                deep = self.client.league_deep_stats(league_id, season_id, stat)
+            except FotMobError:
+                logger.warning("stat %s unavailable for league %s", stat, league_id)
+                continue
+            for entry in deep.get("statsData", []):
+                pid = entry["id"]
+                row = rows.setdefault(
+                    pid,
+                    {
+                        "player_id": pid,
+                        "name": entry.get("name"),
+                        "team_id": entry.get("teamId"),
+                        "position_id": entry.get("position"),
+                        "league_id": league_id,
+                        "season_id": season_id,
+                        "season": season_name,
+                    },
+                )
+                value = (entry.get("statValue") or {}).get("value")
+                row[stat] = value
+                if row.get("position_id") is None and entry.get("position") is not None:
+                    row["position_id"] = entry["position"]
+
+        df = pd.DataFrame(list(rows.values()))
+        if df.empty:
+            return df
+
+        league = config.LEAGUES.get(league_id)
+        df["league"] = league.name if league else str(league_id)
+        df["league_tier"] = league.tier if league else None
+        df["position_group"] = df["position_id"].map(config.position_group_from_id)
+
+        squad_info = self._league_squad_info(league_id)
+        if not squad_info.empty:
+            df = df.merge(squad_info, on="player_id", how="left")
+            # Squad position labels are more precise than the deep-stats grid id.
+            fallback = df["position_label"].map(_group_from_label)
+            df["position_group"] = df["position_group"].fillna(fallback)
+        else:
+            for col in ("age", "height", "country", "market_value", "team", "position_label"):
+                df[col] = None
+
+        front = [
+            "player_id", "name", "age", "team", "team_id", "position_group",
+            "position_label", "league", "league_id", "league_tier",
+            "season", "season_id", "country", "height", "market_value",
+        ]
+        ordered = [c for c in front if c in df.columns]
+        ordered += [c for c in df.columns if c not in ordered]
+        return df[ordered]
+
+    def multi_league_player_table(
+        self,
+        league_ids: Iterable[int],
+        season: str | int | None = None,
+        stats: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """Concatenated player tables for several leagues.
+
+        ``season`` is matched per league by label (e.g. ``2025/2026``); passing
+        ``None`` selects each league's latest season with data.
+        """
+        frames = []
+        for league_id in league_ids:
+            try:
+                frame = self.league_player_table(league_id, season=season, stats=stats)
+            except FotMobError as exc:
+                logger.warning("skipping league %s: %s", league_id, exc)
+                continue
+            if not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True, sort=False)
+
+    def _league_squad_info(self, league_id: int) -> pd.DataFrame:
+        """Age/height/nationality/market value for every squad member of every
+        team currently in the league."""
+        try:
+            league = self.client.league(league_id)
+            tables = league.get("table") or []
+            team_entries = tables[0]["data"]["table"]["all"] if tables else []
+        except (FotMobError, KeyError, IndexError, TypeError):
+            team_entries = []
+
+        records: list[dict] = []
+        for entry in team_entries:
+            team_id = entry.get("id")
+            if not team_id:
+                continue
+            try:
+                team = self.client.team(team_id)
+            except FotMobError:
+                continue
+            team_name = team["details"].get("shortName") or team["details"].get("name")
+            squad = (team.get("squad") or {}).get("squad") or []
+            for group in squad:
+                if group.get("title") == "coach":
+                    continue
+                for member in group.get("members", []):
+                    records.append(
+                        {
+                            "player_id": member["id"],
+                            "team": team_name,
+                            "age": member.get("age"),
+                            "height": member.get("height"),
+                            "country": member.get("cname"),
+                            "market_value": member.get("transferValue"),
+                            "position_label": member.get("positionIdsDesc"),
+                        }
+                    )
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+        return df.drop_duplicates(subset="player_id", keep="first")
+
+    # -- teams ----------------------------------------------------------------
+
+    def league_team_table(
+        self,
+        league_id: int,
+        season: str | int | None = None,
+        stats: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """One row per team with all requested team stats for a league season."""
+        season_id, season_name = self.client.resolve_season_id(league_id, season)
+        stat_names = list(stats) if stats is not None else list(config.TEAM_STAT_TITLES)
+
+        rows: dict[int, dict] = {}
+        for stat in stat_names:
+            try:
+                deep = self.client.league_deep_stats(
+                    league_id, season_id, stat, kind="teams"
+                )
+            except FotMobError:
+                logger.warning("team stat %s unavailable for league %s", stat, league_id)
+                continue
+            for entry in deep.get("statsData", []):
+                tid = entry["teamId"]
+                row = rows.setdefault(
+                    tid,
+                    {
+                        "team_id": tid,
+                        "team": entry.get("name"),
+                        "league_id": league_id,
+                        "season_id": season_id,
+                        "season": season_name,
+                    },
+                )
+                row[stat] = (entry.get("statValue") or {}).get("value")
+
+        df = pd.DataFrame(list(rows.values()))
+        if df.empty:
+            return df
+        league = config.LEAGUES.get(league_id)
+        df["league"] = league.name if league else str(league_id)
+
+        # Attach league table context (points, position) when available.
+        try:
+            table = self.client.league(league_id)["table"][0]["data"]["table"]["all"]
+            standings = {
+                t["id"]: {"table_position": t.get("idx"), "points": t.get("pts"),
+                          "played": t.get("played")}
+                for t in table
+            }
+            for col in ("table_position", "points", "played"):
+                df[col] = df["team_id"].map(
+                    lambda tid, c=col: standings.get(tid, {}).get(c)
+                )
+        except (FotMobError, KeyError, IndexError, TypeError):
+            pass
+        return df
+
+
+def _group_from_label(label: str | None) -> str | None:
+    """Map a squad position label like ``'RW,ST'`` to a position group using
+    its first (primary) token."""
+    if not label or not isinstance(label, str):
+        return None
+    primary = label.split(",")[0].strip().upper()
+    return {
+        "GK": "GK",
+        "CB": "CB",
+        "RB": "FB", "LB": "FB", "RWB": "FB", "LWB": "FB",
+        "CDM": "DM",
+        "CM": "CM",
+        "CAM": "AM",
+        "RW": "W", "LW": "W", "RM": "W", "LM": "W",
+        "ST": "ST", "CF": "ST",
+    }.get(primary)
