@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "ruff>=0.4"]
 
 [project.scripts]
 fotmob-analytics = "fotmob_analytics.cli:main"
@@ -28,3 +28,13 @@ include = ["fotmob_analytics*"]
 
 [tool.pytest.ini_options]
 markers = ["live: tests that hit the real FotMob API (deselect with '-m \"not live\"')"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fotmob_analytics"]
