@@ -78,6 +78,8 @@ class FotMobClient:
         self._rate_lock = threading.Lock()
         self._next_request_at = 0.0
         self._local = threading.local()
+        self._seasons_memo: dict[int, list[dict]] = {}
+        self._memo_lock = threading.Lock()
 
     @property
     def _session(self) -> requests.Session:
@@ -243,7 +245,21 @@ class FotMobClient:
     # -- convenience --------------------------------------------------------
 
     def league_seasons(self, league_id: int) -> list[dict]:
-        """Available seasons for a league: ``[{'id': 27110, 'name': '2025/2026'}, ...]``."""
+        """Available seasons for a league: ``[{'id': 27110, 'name': '2025/2026'}, ...]``.
+
+        Memoized in-memory: it's consulted several times per dataset build and
+        the underlying league payload is large.
+        """
+        with self._memo_lock:
+            cached = self._seasons_memo.get(league_id)
+        if cached is not None:
+            return cached
+        seasons = self._league_seasons_uncached(league_id)
+        with self._memo_lock:
+            self._seasons_memo[league_id] = seasons
+        return seasons
+
+    def _league_seasons_uncached(self, league_id: int) -> list[dict]:
         league = self.league(league_id)
         links = (league.get("stats") or {}).get("seasonStatLinks") or []
         seasons = [
