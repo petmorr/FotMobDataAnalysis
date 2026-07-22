@@ -155,7 +155,7 @@ def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure
             r=[max(p, 7) for p in pct], theta=theta, mode="markers+text",
             marker=dict(size=21, color=colors, line=dict(color="white", width=1.5)),
             text=[f"<b>{p:.0f}</b>" for p in pct],
-            textfont=dict(size=10, color="white"),
+            textfont=dict(size=10, color=[_text_color_for(c) for c in colors]),
             hoverinfo="skip", showlegend=False,
         )
     )
@@ -307,35 +307,6 @@ def _short_title(title: str) -> str:
     return short if len(short) <= 20 else short[:19] + "…"
 
 
-def radar_figure(profile: pd.DataFrame, name: str) -> go.Figure:
-    """Compact polar overview of a percentile profile."""
-    data = _clean(profile)
-    theta = data["title"].map(_short_title).tolist()
-    r = data["percentile"].astype(float).tolist()
-    fig = go.Figure(
-        go.Scatterpolar(
-            r=r + r[:1], theta=theta + theta[:1], fill="toself",
-            fillcolor="rgba(37, 99, 235, 0.25)", line=dict(color=COLOR_A, width=2),
-            name=name, hoverinfo="text",
-            hovertext=[f"{t}: {v:.0f} pct" for t, v in zip(theta + theta[:1], r + r[:1])],
-        )
-    )
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(range=[0, 100], tickvals=[25, 50, 75],
-                            tickfont=dict(size=9, color="#9ca3af"), gridcolor=GRID),
-            angularaxis=dict(tickfont=dict(size=11), gridcolor=GRID),
-            bgcolor=PAPER,
-        ),
-        font=FONT,
-        paper_bgcolor=PAPER,
-        showlegend=False,
-        margin=dict(l=60, r=60, t=40, b=40),
-        height=430,
-    )
-    return fig
-
-
 def archetype_figure(records: list[dict]) -> go.Figure:
     """Horizontal bars of role-archetype fit scores (0-100)."""
     data = pd.DataFrame(records).iloc[::-1]
@@ -416,6 +387,28 @@ SHOT_COLORS = {
     "Miss": "#9ca3af",
     "Post": "#f59e0b",
 }
+# Outcome is double-encoded (colour + symbol) so the shot map stays readable
+# for colour-blind users.
+SHOT_SYMBOLS = {
+    "Goal": "circle",
+    "AttemptSaved": "diamond",
+    "Miss": "x",
+    "Post": "square",
+}
+
+
+def _text_color_for(background: str) -> str:
+    """Black or white text depending on background luminance (WCAG-ish)."""
+    rgb = background.lstrip("#")
+    if background.startswith("rgb"):
+        parts = background[background.index("(") + 1:background.index(")")].split(",")
+        r, g, b = (int(p) for p in parts[:3])
+    elif len(rgb) == 6:
+        r, g, b = (int(rgb[i:i + 2], 16) for i in (0, 2, 4))
+    else:
+        return "white"
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    return "black" if luminance > 150 else "white"
 _PITCH_LEN, _PITCH_WID = 105.0, 68.0
 
 
@@ -480,6 +473,7 @@ def shot_map_figure(shotmap: pd.DataFrame, name: str, season: str) -> go.Figure:
                 marker=dict(
                     size=(subset["xg"].clip(0.02, 1.0) ** 0.5) * 26,
                     color=SHOT_COLORS.get(event, "#9ca3af"),
+                    symbol=SHOT_SYMBOLS.get(event, "x"),
                     opacity=0.85 if event == "Goal" else 0.55,
                     line=dict(width=1, color="white"),
                 ),

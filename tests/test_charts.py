@@ -45,12 +45,6 @@ def test_comparison_requires_shared_metrics(profile_a):
         charts.comparison_figure(profile_a, other, "A", "B")
 
 
-def test_radar_figure(profile_a):
-    fig = charts.radar_figure(profile_a, "A")
-    assert len(fig.data) == 1
-    assert len(fig.data[0].r) == 4  # closed loop
-
-
 def test_key_differences(profile_a, profile_b):
     diffs = charts.key_differences(profile_a, profile_b, "A", "B", min_gap=10.0)
     assert list(diffs["title"]) == ["Goals per 90", "FotMob rating"]
