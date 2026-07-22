@@ -210,6 +210,80 @@ def radar_figure(profile: pd.DataFrame, name: str) -> go.Figure:
     return fig
 
 
+def archetype_figure(records: list[dict]) -> go.Figure:
+    """Horizontal bars of role-archetype fit scores (0-100)."""
+    data = pd.DataFrame(records).iloc[::-1]
+    fig = go.Figure(
+        go.Bar(
+            x=data["score"],
+            y=data["name"],
+            orientation="h",
+            marker_color=[_pct_color(s) for s in data["score"]],
+            text=[f" {s:.0f}" for s in data["score"]],
+            textposition="outside",
+            hovertext=[
+                f"<b>{r['name']}</b> — {r['score']:.0f}/100<br>{r['description']}"
+                for r in records[::-1]
+            ],
+            hoverinfo="text",
+        )
+    )
+    fig.add_vline(x=50, line_dash="dot", line_color="#9ca3af",
+                  annotation_text="average shape", annotation_font_size=11)
+    fig.update_layout(
+        xaxis=dict(range=[0, 108], title="Role fit (50 = league-average shape)",
+                   gridcolor=GRID, zeroline=False),
+        font=FONT,
+        plot_bgcolor=PAPER,
+        paper_bgcolor=PAPER,
+        margin=dict(l=10, r=30, t=10, b=40),
+        height=52 * len(records) + 80,
+        showlegend=False,
+    )
+    return fig
+
+
+def detailed_stats_figure(table: pd.DataFrame) -> go.Figure:
+    """Grouped percentile bars for the detailed stats table (one section per
+    FotMob stat group), using FotMob's own same-position percentile ranks."""
+    data = table.dropna(subset=["percentile"]).copy()
+    if data.empty:
+        raise ValueError("no detailed percentiles to plot")
+    labels = [
+        f"{row['title']}  ·  <i>{row['group']}</i>" for _, row in data.iterrows()
+    ][::-1]
+    pct = data["percentile"].astype(float).iloc[::-1]
+    values = data["value"].iloc[::-1]
+    fig = go.Figure(
+        go.Bar(
+            x=pct,
+            y=labels,
+            orientation="h",
+            marker_color=[_pct_color(p) for p in pct],
+            text=[f" {p:.0f}" for p in pct],
+            textposition="outside",
+            hovertext=[
+                f"<b>{t}</b><br>Season total: {v:g}<br>Percentile: {p:.0f}"
+                for t, v, p in zip(data["title"].iloc[::-1], values, pct)
+            ],
+            hoverinfo="text",
+        )
+    )
+    fig.add_vline(x=50, line_dash="dot", line_color="#9ca3af")
+    fig.update_layout(
+        xaxis=dict(range=[0, 108], title="FotMob percentile vs same-position league peers",
+                   gridcolor=GRID, zeroline=False),
+        yaxis=dict(tickfont=dict(size=11)),
+        font=FONT,
+        plot_bgcolor=PAPER,
+        paper_bgcolor=PAPER,
+        margin=dict(l=10, r=30, t=10, b=40),
+        height=max(400, 24 * len(data) + 90),
+        showlegend=False,
+    )
+    return fig
+
+
 def key_differences(
     profile_a: pd.DataFrame,
     profile_b: pd.DataFrame,

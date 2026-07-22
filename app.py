@@ -11,7 +11,9 @@ import streamlit as st
 from fotmob_analytics import config, metrics
 from fotmob_analytics.analysis import PlayerAnalyzer, PlayerContext, SeasonProfile
 from fotmob_analytics.charts import (
+    archetype_figure,
     comparison_figure,
+    detailed_stats_figure,
     key_differences,
     percentile_bar_figure,
     radar_figure,
@@ -78,6 +80,24 @@ def season_profile(
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def role_profile(ctx: dict, season: str | None) -> dict | None:
+    """Role archetype classification + detailed stats table for a player."""
+    role, detailed = get_analyzer().role_classification(
+        PlayerContext(**ctx), season_name=season
+    )
+    if role is None or detailed is None:
+        return None
+    return {
+        "records": role.as_records(),
+        "confidence": role.confidence,
+        "primary_name": role.primary.name,
+        "primary_description": role.primary.description,
+        "table": detailed.table,
+        "season": detailed.season,
+    }
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def multi_league_players(league_ids: tuple[int, ...], _progress=None) -> pd.DataFrame:
     return get_analyzer().builder.multi_league_player_table(
         list(league_ids), season=None, progress=_progress
@@ -124,7 +144,7 @@ def player_picker(label: str, key: str, container=None) -> dict | None:
     return ctx
 
 
-def player_header(ctx: dict, season: str) -> None:
+def player_header(ctx: dict, season: str, role: dict | None = None) -> None:
     photo, info = st.columns([1, 8])
     with photo:
         st.image(player_image_url(ctx["player_id"]), width=110)
@@ -139,6 +159,11 @@ def player_header(ctx: dict, season: str) -> None:
             ctx.get("country"),
         ]
         st.markdown(" · ".join(c for c in chips if c))
+        if role is not None:
+            qualifier = {"clear": "", "leaning": " (leaning)", "mixed": " (mixed profile)"}
+            st.markdown(
+                f"🎯 Role type: **{role['primary_name']}**{qualifier[role['confidence']]}"
+            )
         st.caption(f"Season analysed: **{season}**")
 
 
@@ -211,6 +236,15 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
     m1, m2 = st.columns(2)
     m1.metric(f"{ctx['name']} · {base.season}", score_text(base.role_score))
     m2.metric(f"{other['name']} · {other_sp.season}", score_text(other_sp.role_score))
+
+    role_a = role_profile(ctx, base.season)
+    role_b = role_profile(other, other_sp.season)
+    if role_a and role_b and role_a["primary_name"] != role_b["primary_name"]:
+        st.caption(
+            f"Style note: {ctx['name']} profiles as a **{role_a['primary_name']}**, "
+            f"{other['name']} as a **{role_b['primary_name']}** — role differences "
+            "explain some percentile gaps below."
+        )
 
     st.plotly_chart(
         comparison_figure(
@@ -421,7 +455,9 @@ if base is None:
     )
     st.stop()
 
-player_header(ctx, base.season)
+with st.spinner("Classifying role type..."):
+    role = role_profile(ctx, base.season)
+player_header(ctx, base.season, role)
 
 c1, c2 = st.columns([3, 2])
 with c1:
@@ -439,6 +475,40 @@ with c2:
     st.metric("Role score vs league peers", score_text(base.role_score))
     st.plotly_chart(radar_figure(base.profile, ctx["name"]), width="stretch")
     strengths_weaknesses_lists(base.profile)
+
+# ---- Section 2b: role profile and in-depth stats ---------------------------
+
+if role is not None:
+    st.subheader("Player profile — role within the position")
+    col_role, col_detail = st.columns([2, 3])
+    with col_role:
+        st.markdown(
+            f"**{role['primary_name']}** — {role['primary_description']}"
+        )
+        st.plotly_chart(archetype_figure(role["records"]), width="stretch")
+        st.caption(
+            "Fit scores measure how much the player's statistical shape "
+            "matches each archetype (50 = league-average shape for the "
+            "position). Archetypes follow the taxonomies used by SkillCorner, "
+            "The Athletic's player roles and role-clustering research."
+        )
+        if role["confidence"] == "mixed":
+            st.info(
+                "This profile is **mixed** — the player blends several role "
+                "types, so judge them across archetypes rather than by one label."
+            )
+    with col_detail:
+        st.markdown("**In-depth season stats** (FotMob percentile vs same-position league peers)")
+        groups = list(role["table"]["group"].dropna().unique())
+        chosen = st.multiselect("Stat groups", groups, default=groups,
+                                label_visibility="collapsed")
+        table = role["table"][role["table"]["group"].isin(chosen)]
+        if not table.dropna(subset=["percentile"]).empty:
+            st.plotly_chart(detailed_stats_figure(table), width="stretch")
+        profile_download(
+            role["table"], f"detailed_{ctx['player_id']}.csv",
+            "Download in-depth stats (CSV)",
+        )
 
 # ---- Section 3: evaluation --------------------------------------------------
 
