@@ -14,7 +14,8 @@ The app walks through the intended workflow:
 
 1. **Find a player** — search by name in the sidebar.
 2. **Season analysis** — pick a season (defaults to the latest with data) and get a player card with photo, a colour-coded percentile profile, radar overview, role score and standout strengths/weaknesses vs same-position league peers.
-3. **Evaluate against...**
+3. **Player profile** — a role-archetype breakdown (what *kind* of winger/striker/midfielder they are) plus ~45 in-depth season stats (xGOT, non-penalty xG, duels, aerials, touches, crosses, sweeper actions...) with FotMob's percentile ranks against same-position league peers.
+4. **Evaluate against...**
    - **Another player** — search any player and pick *their* season. Each player is ranked against their own league season's positional peers, and a dumbbell chart highlights the key percentile differences (bold connectors + a written "Key differences" list).
    - **A peer group** — same/similar position players, with an age slider defaulting to a sensible ±3-year range around the player's age, and a league scope of *same league*, *similar-level leagues (auto)* or a hand-picked list. Similar-level leagues are chosen by a strength score that blends **UEFA 5-year country coefficients** with **Opta Power Rankings** league averages. You get a percentile graph against that exact pool, above/below-group breakdowns and the closest statistical matches.
 
@@ -23,6 +24,8 @@ The app walks through the intended workflow:
 - **Automated peer groups** — no manual data wrangling. The tool detects a player's position group, age and league from FotMob, then compares them against:
   - peers in the same league (same position, ±3 years by default, minutes floor), and
   - peers across leagues of similar strength (configurable breadth).
+- **Role archetypes** — players are classified into what *kind* of player they are within their position (25 archetypes across 8 position groups: poacher / target / complete / pressing forward; inverted / touchline / ball-carrying / two-way winger; regista / anchor / segundo volante; ball-playing CB / stopper / aerial dominator; sweeper-keeper / shot-stopper / distributor...). Classification scores the player's statistical shape against signed metric signatures per archetype, using FotMob's per-90 percentile ranks vs same-position league peers. The taxonomy follows SkillCorner's position-group profiling, The Athletic's data-driven player roles and published role-clustering research. Because a touchline winger and an inverted winger rank differently on the same data points, the app labels mixed profiles explicitly and shows the full archetype fit breakdown.
+- **In-depth stats** — beyond the ~37 league leaderboard metrics, each player's profile pulls FotMob's detailed season stats (~45 data points: xGOT, non-penalty xG, headed shots, cross volume/accuracy, duels and aerials won, touches, touches in the opposition box, dispossessed, fouls won, dribbled past, sweeper actions, high claims, errors leading to goals...), each with FotMob's percentile rank against same-position league peers.
 - **League strength model** — every supported league carries a 0–100 strength score averaging its normalised UEFA 5-year country coefficient (top flights) and Opta Power Rankings league average (which also covers second tiers and non-UEFA leagues such as Brazil, Argentina, MLS and Liga MX). "Similar level" means within a strength window of the player's league, with the window controlled by a strict/broad/very-broad knob. Raw source values live in `fotmob_analytics/config.py` with retrieval dates for easy updating.
 - **Cross-season comparisons** — compare a player's current season with any player's past season; each is percentile-ranked within their own league season so the comparison measures relative dominance in context.
 - **Percentile profiles** with position-specific metric templates (8 role templates: GK, CB, FB, DM, CM, AM, W, ST), correctly flipping metrics where lower is better (fouls, big chances missed, goals conceded...).
@@ -121,6 +124,8 @@ pool = builder.multi_league_player_table([47, 87, 54])    # cross-league pool
 | `fotmob_analytics/config.py` | League strength model (UEFA + Opta), position mappings, metric catalogs, role templates |
 | `fotmob_analytics/dataset.py` | Builds tidy player/team tables from the API |
 | `fotmob_analytics/peers.py` | Peer group specification and filtering |
+| `fotmob_analytics/details.py` | In-depth per-player season stats (parsing + canonical features) |
+| `fotmob_analytics/roles.py` | Role archetype taxonomy and classification |
 | `fotmob_analytics/metrics.py` | Percentiles, role scores, similarity (pure, offline-testable) |
 | `fotmob_analytics/analysis.py` | Player pipeline and scouting reports |
 | `fotmob_analytics/team.py` | Team pipeline and reports |
