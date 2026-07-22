@@ -10,9 +10,10 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from fotmob_analytics import config, metrics
+from fotmob_analytics import config, metrics, roles
 from fotmob_analytics.client import FotMobClient, FotMobError
 from fotmob_analytics.dataset import DatasetBuilder
+from fotmob_analytics.details import DetailedStats, fetch_detailed_stats
 from fotmob_analytics.peers import PeerSpec
 
 logger = logging.getLogger(__name__)
@@ -62,11 +63,20 @@ class ScoutingReport:
     similar: pd.DataFrame
     strengths: pd.DataFrame = field(default_factory=pd.DataFrame)
     weaknesses: pd.DataFrame = field(default_factory=pd.DataFrame)
+    role: roles.RoleClassification | None = None
+    detailed: DetailedStats | None = None
 
     def to_dict(self) -> dict:
         return {
             "player": vars(self.context),
             "season": self.season,
+            "role_archetypes": self.role.as_records() if self.role else None,
+            "role_confidence": self.role.confidence if self.role else None,
+            "detailed_stats": (
+                self.detailed.table.to_dict(orient="records")
+                if self.detailed is not None
+                else None
+            ),
             "league_peer_group": {
                 "description": self.league_peer_description,
                 "size": self.league_peer_count,
@@ -109,7 +119,33 @@ class ScoutingReport:
         lines.append("  " + " | ".join(details))
         if ctx.market_value:
             lines.append(f"  Market value: EUR {ctx.market_value/1e6:.1f}m")
+        if self.role is not None:
+            lines.append(
+                f"  Role type: {self.role.primary.name} "
+                f"({self.role.primary_score:.0f}/100, {self.role.confidence})"
+            )
         lines.append("=" * 72)
+
+        if self.role is not None:
+            lines.append("")
+            lines.append("Role archetype fit (statistical shape vs position peers):")
+            for arch, score in self.role.scores:
+                bar = "#" * int(round(score / 10.0))
+                lines.append(f"  {score:5.1f}  {arch.name:<38} {bar}")
+            lines.append(f"  -> {self.role.primary.description}")
+
+        if self.detailed is not None:
+            lines.append("")
+            lines.append(
+                "Detailed season stats (percentiles vs same-position league peers):"
+            )
+            for group_name, group in self.detailed.table.groupby("group", sort=False):
+                lines.append(f"  {group_name}")
+                for _, row in group.iterrows():
+                    pct = row["percentile"]
+                    pct_text = "-" if pct is None or pd.isna(pct) else f"{pct:.0f}"
+                    value = "-" if row["value"] is None or pd.isna(row["value"]) else f"{row['value']:g}"
+                    lines.append(f"    {row['title']:<34}{value:>10}{pct_text:>6}")
 
         lines.append("")
         lines.append(
@@ -398,6 +434,15 @@ class PlayerAnalyzer:
         base_profile = cross_profile if cross_profile is not None else league_profile
         strengths, weaknesses = metrics.strengths_and_weaknesses(base_profile)
 
+        detailed = fetch_detailed_stats(
+            self.client, player_id, ctx.league_id, season_name=season_name
+        )
+        role = (
+            roles.classify(detailed, ctx.position_group)
+            if detailed is not None
+            else None
+        )
+
         return ScoutingReport(
             context=ctx,
             season=season_name,
@@ -412,7 +457,23 @@ class PlayerAnalyzer:
             similar=similar,
             strengths=strengths,
             weaknesses=weaknesses,
+            role=role,
+            detailed=detailed,
         )
+
+    def role_classification(
+        self, ctx: PlayerContext, season_name: str | None = None
+    ) -> tuple[roles.RoleClassification | None, DetailedStats | None]:
+        """Classify a player's role archetype from their detailed season
+        stats (one extra API call; both values None if unavailable)."""
+        if ctx.league_id is None or ctx.position_group is None:
+            return None, None
+        detailed = fetch_detailed_stats(
+            self.client, ctx.player_id, ctx.league_id, season_name=season_name
+        )
+        if detailed is None:
+            return None, None
+        return roles.classify(detailed, ctx.position_group), detailed
 
 
 def _find_player_row(pool: pd.DataFrame, ctx: PlayerContext, player_id: int) -> pd.Series:
