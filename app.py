@@ -18,6 +18,7 @@ from fotmob_analytics.charts import (
     key_differences,
     percentile_bar_figure,
     pizza_figure,
+    player_card_figure,
     shot_map_figure,
 )
 from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
@@ -202,6 +203,40 @@ def strengths_weaknesses_lists(profile: pd.DataFrame, container=None) -> None:
         box.caption("No metrics stand far above or below the peer group.")
 
 
+def render_player_card(
+    ctx: dict,
+    sp: SeasonProfile,
+    profile: pd.DataFrame,
+    peer_label: str,
+    role: dict | None,
+    score: float | None,
+) -> None:
+    """One shareable graphic: personal data + role profile + key attributes."""
+    personal = {
+        "name": ctx["name"],
+        "age": ctx.get("age"),
+        "position": config.GROUP_LABELS.get(ctx["position_group"]),
+        "team": ctx.get("team"),
+        "league": ctx.get("league_name"),
+        "country": ctx.get("country"),
+        "height": ctx.get("height"),
+        "market_value": ctx.get("market_value"),
+        "minutes": sp.row.get("mins_played")
+        if pd.notna(sp.row.get("mins_played")) else None,
+        "rating": sp.row.get("rating") if pd.notna(sp.row.get("rating")) else None,
+    }
+    fig = player_card_figure(
+        personal,
+        profile,
+        peer_label=peer_label,
+        role_name=role["primary_name"] if role else None,
+        role_confidence=role["confidence"] if role else None,
+        role_score=score,
+        photo_url=player_image_url(ctx["player_id"]),
+    )
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": True})
+
+
 def profile_download(profile: pd.DataFrame, filename: str, label: str) -> None:
     st.download_button(
         label, safe_csv_bytes(profile), file_name=filename,
@@ -238,12 +273,21 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
         st.error(f"{other['name']} has no stats for that season.")
         return
 
-    m1, m2 = st.columns(2)
-    m1.metric(f"{ctx['name']} · {base.season}", score_text(base.role_score))
-    m2.metric(f"{other['name']} · {other_sp.season}", score_text(other_sp.role_score))
-
     role_a = role_profile(ctx, base.season)
     role_b = role_profile(other, other_sp.season)
+
+    # Cards are designed full-width; stacking keeps them readable.
+    render_player_card(
+        ctx, base, base.profile,
+        peer_label=f"{ctx['league_name']} {config.GROUP_LABELS[ctx['position_group']].lower()}s, {base.season}",
+        role=role_a, score=base.role_score,
+    )
+    render_player_card(
+        other, other_sp, other_sp.profile,
+        peer_label=f"{other['league_name']} {config.GROUP_LABELS[ctx['position_group']].lower()}s, {other_sp.season}",
+        role=role_b, score=other_sp.role_score,
+    )
+
     if role_a and role_b and role_a["primary_name"] != role_b["primary_name"]:
         st.caption(
             f"Style note: {md_escape(ctx['name'])} profiles as a "
@@ -383,7 +427,11 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
     desc_bits.append(f"{len(league_ids)} league(s)")
     desc = ", ".join(desc_bits)
 
-    st.metric("Role score vs this peer group", score_text(group_score))
+    group_role = role_profile(ctx, base.season)
+    render_player_card(
+        ctx, base, group_profile, peer_label=desc,
+        role=group_role, score=group_score,
+    )
     st.plotly_chart(percentile_bar_figure(group_profile, desc), width="stretch")
 
     col_s, col_w = st.columns(2)
