@@ -251,6 +251,58 @@ PLAYER_STAT_TITLES: dict[str, str] = {
     "red_card": "Red cards",
 }
 
+# Phase-of-play category per metric, used to colour-group profile charts the
+# way FBref/StatsBomb scouting reports do (attacking / possession / defending).
+PLAYER_STAT_CATEGORIES: dict[str, str] = {
+    "goals": "Attacking",
+    "goals_per_90": "Attacking",
+    "expected_goals": "Attacking",
+    "expected_goals_per_90": "Attacking",
+    "expected_goalsontarget": "Attacking",
+    "ontarget_scoring_att": "Attacking",
+    "total_scoring_att": "Attacking",
+    "big_chance_missed": "Attacking",
+    "penalty_won": "Attacking",
+    "goal_assist": "Creation",
+    "expected_assists": "Creation",
+    "expected_assists_per_90": "Creation",
+    "big_chance_created": "Creation",
+    "total_att_assist": "Creation",
+    "_expected_goals_and_expected_assists_per_90": "Attacking",
+    "_goals_and_goal_assist": "Attacking",
+    "won_contest": "Possession",
+    "accurate_pass": "Possession",
+    "accurate_long_balls": "Possession",
+    "defensive_contributions": "Defending",
+    "total_tackle": "Defending",
+    "interception": "Defending",
+    "effective_clearance": "Defending",
+    "outfielder_block": "Defending",
+    "ball_recovery": "Defending",
+    "poss_won_att_3rd": "Defending",
+    "penalty_conceded": "Defending",
+    "clean_sheet": "Goalkeeping",
+    "_save_percentage": "Goalkeeping",
+    "saves": "Goalkeeping",
+    "_goals_prevented": "Goalkeeping",
+    "goals_conceded": "Goalkeeping",
+    "fouls": "Discipline",
+    "yellow_card": "Discipline",
+    "red_card": "Discipline",
+    "rating": "Overall",
+    "mins_played": "Overall",
+}
+
+CATEGORY_COLORS: dict[str, str] = {
+    "Attacking": "#d64550",
+    "Creation": "#e8871a",
+    "Possession": "#2a9d8f",
+    "Defending": "#2563eb",
+    "Goalkeeping": "#7c3aed",
+    "Discipline": "#6b7280",
+    "Overall": "#0f172a",
+}
+
 # Metrics where a LOWER value is better.
 LOWER_IS_BETTER: frozenset[str] = frozenset({
     "big_chance_missed",

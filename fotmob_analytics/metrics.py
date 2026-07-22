@@ -57,12 +57,20 @@ def percentile_profile(
                 "title": config.PLAYER_STAT_TITLES.get(
                     metric, config.TEAM_STAT_TITLES.get(metric, metric)
                 ),
+                "category": config.PLAYER_STAT_CATEGORIES.get(metric, "Other"),
                 "value": value,
                 "peer_median": None if pd.isna(median) else round(float(median), 2),
                 "percentile": pct,
             }
         )
-    return pd.DataFrame(records)
+    df = pd.DataFrame(records)
+    if not df.empty:
+        order = ["Attacking", "Creation", "Possession", "Defending",
+                 "Goalkeeping", "Discipline", "Overall", "Other"]
+        df["category"] = pd.Categorical(df["category"], categories=order, ordered=True)
+        df = df.sort_values("category", kind="stable").reset_index(drop=True)
+        df["category"] = df["category"].astype(str)
+    return df
 
 
 def role_score(profile: pd.DataFrame, weights: dict[str, float]) -> float | None:
