@@ -24,7 +24,6 @@ from fotmob_analytics import config, metrics
 from fotmob_analytics.analysis import PlayerAnalyzer
 from fotmob_analytics.client import FotMobClient, FotMobError
 from fotmob_analytics.dataset import DatasetBuilder
-from fotmob_analytics.peers import PeerSpec
 from fotmob_analytics.team import TeamAnalyzer
 
 
@@ -62,10 +61,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-minutes", type=int, default=450)
     p.add_argument("--top", type=int, default=10)
 
-    p = sub.add_parser("compare", help="compare two players against a shared peer pool")
+    p = sub.add_parser(
+        "compare",
+        help="compare two players; each is ranked vs their own league season's positional peers",
+    )
     p.add_argument("player_a")
     p.add_argument("player_b")
-    p.add_argument("--season", default=None)
+    p.add_argument("--season", default=None, help="season for both players")
+    p.add_argument("--season-a", default=None, help="season for player A (overrides --season)")
+    p.add_argument("--season-b", default=None, help="season for player B (overrides --season)")
     p.add_argument("--min-minutes", type=int, default=450)
     p.add_argument("--chart", metavar="PATH", help="save a comparison chart PNG")
 
@@ -176,35 +180,39 @@ def cmd_compare(args: argparse.Namespace, client: FotMobClient) -> int:
         return 1
     template = config.ROLE_TEMPLATES[group]
 
-    league_ids = {ctx.league_id for ctx in (ctx_a, ctx_b) if ctx.league_id}
-    pool = builder.multi_league_player_table(sorted(league_ids), season=args.season)
-    if pool.empty:
-        print("No stats available for the players' leagues", file=sys.stderr)
-        return 1
-
-    rows = {}
-    for ctx in (ctx_a, ctx_b):
+    # Each player is profiled against their OWN league season's positional
+    # peers, so comparisons across leagues/seasons measure relative dominance.
+    profiles: dict[int, pd.DataFrame] = {}
+    seasons: dict[int, str] = {}
+    for ctx, season_arg in ((ctx_a, args.season_a), (ctx_b, args.season_b)):
+        season = season_arg or args.season
+        pool = builder.league_player_table(ctx.league_id, season=season)
+        if pool.empty:
+            print(f"No stats for {ctx.name}'s league ({season=})", file=sys.stderr)
+            return 1
         match = pool[pool["player_id"] == ctx.player_id]
         if match.empty:
-            print(f"{ctx.name} has no stats this season", file=sys.stderr)
+            print(f"{ctx.name} has no stats in that season", file=sys.stderr)
             return 1
-        rows[ctx.player_id] = match.iloc[0]
+        peers = pool[
+            (pool["position_group"] == group)
+            & (pool["mins_played"].fillna(0) >= args.min_minutes)
+            & (~pool["player_id"].isin({id_a, id_b}))
+        ]
+        profiles[ctx.player_id] = metrics.percentile_profile(
+            match.iloc[0], peers, template.metrics
+        )
+        seasons[ctx.player_id] = str(pool["season"].iloc[0])
 
-    spec = PeerSpec(
-        position_group=group,
-        min_minutes=args.min_minutes,
-        exclude_player_ids={id_a, id_b},
-        include_cross_league=False,
-    )
-    peers = spec.apply(pool)
-    prof_a = metrics.percentile_profile(rows[id_a], peers, template.metrics)
-    prof_b = metrics.percentile_profile(rows[id_b], peers, template.metrics)
+    prof_a, prof_b = profiles[id_a], profiles[id_b]
     score_a = metrics.role_score(prof_a, template.weights)
     score_b = metrics.role_score(prof_b, template.weights)
 
-    season = str(pool["season"].iloc[0])
-    pool_desc = f"{len(peers)} {config.GROUP_LABELS.get(group, group)}s, {season}"
-    print(f"\nComparison vs shared peer pool ({pool_desc})\n")
+    pool_desc = (
+        f"each vs own league {config.GROUP_LABELS.get(group, group).lower()} peers: "
+        f"{ctx_a.name} {seasons[id_a]}, {ctx_b.name} {seasons[id_b]}"
+    )
+    print(f"\nComparison ({pool_desc})\n")
     header = f"{'Metric':<34}{ctx_a.name[:18]:>20}{ctx_b.name[:18]:>20}"
     print(header)
     print("-" * len(header))
