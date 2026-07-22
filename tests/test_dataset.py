@@ -1,6 +1,7 @@
 """Dataset builder tests using a fake FotMob client (no network)."""
 
 import pandas as pd
+import pytest
 
 from fotmob_analytics.dataset import DatasetBuilder
 
@@ -25,6 +26,10 @@ class FakeClient:
                  "statValue": {"value": 7.5}},
                 {"id": 2, "teamId": 11, "name": "Beta", "position": 83,
                  "statValue": {"value": 7.1}},
+            ],
+            "big_chance_created": [
+                {"id": 1, "teamId": 10, "name": "Alpha", "position": 115,
+                 "statValue": {"value": 30}},
             ],
         }
         self.team_stats = {
@@ -88,6 +93,19 @@ class TestLeaguePlayerTable:
         beta = df[df["player_id"] == 2].iloc[0]
         assert beta["position_group"] == "W"
         assert pd.isna(beta["goals"])
+
+    def test_derived_per90_columns(self):
+        builder = DatasetBuilder(FakeClient())
+        df = builder.league_player_table(
+            47, stats=["mins_played", "big_chance_created"]
+        )
+        alpha = df[df["player_id"] == 1].iloc[0]
+        assert alpha["big_chance_created_per_90"] == pytest.approx(
+            30 / 2700 * 90, abs=1e-3
+        )
+        # player without the source stat gets NaN, not a crash
+        beta = df[df["player_id"] == 2].iloc[0]
+        assert pd.isna(beta["big_chance_created_per_90"])
 
     def test_multi_league_concat_skips_empty(self):
         builder = DatasetBuilder(FakeClient())

@@ -35,6 +35,13 @@ def striker_pool() -> pd.DataFrame:
             "penalty_won": rng.integers(0, 4, n),
             "big_chance_missed": rng.integers(0, 20, n),
             "fouls": np.round(rng.uniform(0.2, 2.2, n), 2),
+            "expected_goalsontarget": np.round(rng.uniform(0, 20, n), 2),
         }
     )
+    df["big_chance_created_per_90"] = (
+        df["big_chance_created"] / df["mins_played"] * 90
+    ).round(3)
+    df["expected_goalsontarget_per_90"] = (
+        df["expected_goalsontarget"] / df["mins_played"] * 90
+    ).round(3)
     return df

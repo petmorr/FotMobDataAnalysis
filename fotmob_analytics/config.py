@@ -327,116 +327,142 @@ class RoleTemplate:
         return list(self.weights)
 
 
+# ---------------------------------------------------------------------------
+# Derived per-90 metrics
+# ---------------------------------------------------------------------------
+#
+# Several high-signal FotMob leaderboard stats are season TOTALS (big chances
+# created, chances created, xGOT, goals prevented). Totals reward whoever
+# played the most minutes, not whoever performed best, so the dataset builder
+# derives minutes-normalised per-90 versions for the whole peer pool and the
+# role templates use those instead.
+
+DERIVED_PER90_METRICS: dict[str, str] = {
+    "big_chance_created_per_90": "big_chance_created",
+    "total_att_assist_per_90": "total_att_assist",
+    "expected_goalsontarget_per_90": "expected_goalsontarget",
+    "_goals_prevented_per_90": "_goals_prevented",
+}
+
+PLAYER_STAT_TITLES.update(
+    {
+        "big_chance_created_per_90": "Big chances created per 90",
+        "total_att_assist_per_90": "Chances created per 90",
+        "expected_goalsontarget_per_90": "xGOT per 90",
+        "_goals_prevented_per_90": "Goals prevented per 90",
+    }
+)
+
+PLAYER_STAT_CATEGORIES.update(
+    {
+        "big_chance_created_per_90": "Creation",
+        "total_att_assist_per_90": "Creation",
+        "expected_goalsontarget_per_90": "Attacking",
+        "_goals_prevented_per_90": "Goalkeeping",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
+# Role templates
+# ---------------------------------------------------------------------------
+#
+# Templates deliberately use only per-90 or rate/quality metrics — the data
+# points with the most signal about a player's profile and skill level:
+#
+# - process over outcome: xG/xA/xGOT per 90 ahead of raw goal counts, because
+#   underlying chance quality is more repeatable season to season;
+# - minutes-normalised everything: no season totals;
+# - no noise metrics: FotMob rating (already shown as a KPI), fouls, cards,
+#   penalties won/conceded and "big chances missed" are excluded — they say
+#   little about skill and pollute both the charts and the role score.
+
 ROLE_TEMPLATES: dict[str, RoleTemplate] = {
     "ST": RoleTemplate("ST", {
-        "goals_per_90": 1.5,
-        "expected_goals_per_90": 1.25,
+        "expected_goals_per_90": 1.5,       # chance quality generated
+        "goals_per_90": 1.25,               # finishing output
+        "expected_goalsontarget_per_90": 1.0,  # strike quality
         "ontarget_scoring_att": 1.0,
         "total_scoring_att": 0.75,
-        "expected_assists_per_90": 0.5,
-        "big_chance_created": 0.5,
+        "expected_assists_per_90": 0.75,
+        "big_chance_created_per_90": 0.75,
         "won_contest": 0.5,
-        "accurate_pass": 0.25,
-        "penalty_won": 0.25,
-        "big_chance_missed": 0.5,
-        "fouls": 0.25,
-        "rating": 1.0,
+        "accurate_pass": 0.5,               # link play volume
     }),
     "W": RoleTemplate("W", {
-        "goals_per_90": 1.0,
-        "expected_goals_per_90": 0.75,
         "expected_assists_per_90": 1.25,
-        "big_chance_created": 1.25,
-        "total_att_assist": 1.0,
+        "big_chance_created_per_90": 1.25,
+        "total_att_assist_per_90": 1.0,
         "won_contest": 1.25,
+        "expected_goals_per_90": 1.0,
+        "goals_per_90": 0.75,
         "ontarget_scoring_att": 0.75,
-        "accurate_pass": 0.5,
-        "penalty_won": 0.5,
         "poss_won_att_3rd": 0.5,
-        "fouls": 0.25,
-        "rating": 1.0,
+        "accurate_pass": 0.5,
     }),
     "AM": RoleTemplate("AM", {
-        "expected_assists_per_90": 1.25,
-        "big_chance_created": 1.25,
-        "total_att_assist": 1.25,
-        "goals_per_90": 1.0,
-        "expected_goals_per_90": 0.75,
-        "won_contest": 1.0,
+        "expected_assists_per_90": 1.5,
+        "total_att_assist_per_90": 1.25,
+        "big_chance_created_per_90": 1.25,
+        "expected_goals_per_90": 1.0,
+        "goals_per_90": 0.75,
+        "won_contest": 0.75,
         "accurate_pass": 0.75,
         "ontarget_scoring_att": 0.5,
         "poss_won_att_3rd": 0.5,
-        "fouls": 0.25,
-        "rating": 1.0,
     }),
     "CM": RoleTemplate("CM", {
         "accurate_pass": 1.25,
         "expected_assists_per_90": 1.0,
-        "total_att_assist": 1.0,
-        "big_chance_created": 0.75,
+        "total_att_assist_per_90": 0.75,
         "accurate_long_balls": 0.75,
-        "goals_per_90": 0.5,
-        "won_contest": 0.5,
+        "ball_recovery": 1.0,
         "total_tackle": 0.75,
         "interception": 0.75,
-        "ball_recovery": 1.0,
         "defensive_contributions": 0.75,
-        "fouls": 0.25,
-        "rating": 1.0,
+        "expected_goals_per_90": 0.5,
+        "won_contest": 0.5,
     }),
     "DM": RoleTemplate("DM", {
         "total_tackle": 1.25,
         "interception": 1.25,
         "ball_recovery": 1.25,
-        "defensive_contributions": 1.25,
+        "defensive_contributions": 1.0,
         "accurate_pass": 1.0,
         "accurate_long_balls": 0.75,
         "poss_won_att_3rd": 0.5,
         "expected_assists_per_90": 0.25,
-        "goals_per_90": 0.25,
-        "fouls": 0.5,
-        "yellow_card": 0.25,
-        "rating": 1.0,
     }),
     "FB": RoleTemplate("FB", {
         "total_tackle": 1.0,
         "interception": 1.0,
-        "defensive_contributions": 1.0,
+        "defensive_contributions": 0.75,
         "ball_recovery": 0.75,
+        "expected_assists_per_90": 1.0,
+        "big_chance_created_per_90": 0.75,
+        "total_att_assist_per_90": 0.75,
+        "won_contest": 0.75,
         "accurate_pass": 0.75,
         "accurate_long_balls": 0.5,
-        "expected_assists_per_90": 1.0,
-        "big_chance_created": 0.75,
-        "total_att_assist": 0.75,
-        "won_contest": 0.75,
-        "fouls": 0.25,
-        "penalty_conceded": 0.25,
-        "rating": 1.0,
     }),
     "CB": RoleTemplate("CB", {
-        "effective_clearance": 1.25,
         "interception": 1.25,
+        "effective_clearance": 1.0,
         "outfielder_block": 1.0,
         "total_tackle": 1.0,
         "ball_recovery": 0.75,
-        "defensive_contributions": 1.25,
-        "accurate_pass": 0.75,
+        "defensive_contributions": 1.0,
+        "accurate_pass": 1.0,
         "accurate_long_balls": 0.75,
-        "goals_per_90": 0.25,
-        "fouls": 0.5,
-        "penalty_conceded": 0.5,
-        "rating": 1.0,
     }),
     "GK": RoleTemplate("GK", {
         "_save_percentage": 1.5,
-        "_goals_prevented": 1.5,
-        "saves": 1.0,
-        "clean_sheet": 1.0,
+        "_goals_prevented_per_90": 1.5,
         "goals_conceded": 1.0,
+        "saves": 0.75,
+        "clean_sheet": 0.75,
         "accurate_pass": 0.5,
         "accurate_long_balls": 0.5,
-        "penalty_conceded": 0.25,
-        "rating": 1.0,
     }),
 }
 
@@ -445,12 +471,22 @@ BASE_PLAYER_STATS: tuple[str, ...] = ("mins_played", "rating", "goals", "goal_as
 
 
 def all_template_metrics() -> list[str]:
-    """Union of every role template metric plus the base stats."""
+    """Union of every role template metric plus the base stats (may include
+    derived per-90 names; see :func:`required_raw_stats` for fetching)."""
     seen: dict[str, None] = dict.fromkeys(BASE_PLAYER_STATS)
     for tpl in ROLE_TEMPLATES.values():
         for m in tpl.metrics:
             seen.setdefault(m)
     return list(seen)
+
+
+def required_raw_stats() -> list[str]:
+    """FotMob leaderboard stats to fetch: template metrics with derived
+    per-90 names replaced by their source totals."""
+    raw: dict[str, None] = {}
+    for metric in all_template_metrics():
+        raw.setdefault(DERIVED_PER90_METRICS.get(metric, metric))
+    return list(raw)
 
 
 # ---------------------------------------------------------------------------

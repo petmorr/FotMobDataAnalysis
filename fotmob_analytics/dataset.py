@@ -42,7 +42,7 @@ class DatasetBuilder:
     ) -> pd.DataFrame:
         """One row per player with all requested stats for a league season."""
         season_id, season_name = self.client.resolve_season_id(league_id, season)
-        stat_names = list(stats) if stats is not None else config.all_template_metrics()
+        stat_names = list(stats) if stats is not None else config.required_raw_stats()
         historical = self.client.is_historical_season(league_id, season_id)
 
         def fetch(stat: str) -> tuple[str, list[dict]]:
@@ -88,6 +88,7 @@ class DatasetBuilder:
         df["league"] = league.name if league else str(league_id)
         df["league_tier"] = league.tier if league else None
         df["position_group"] = df["position_id"].map(config.position_group_from_id)
+        _add_derived_per90(df)
 
         squad_info = self._league_squad_info(league_id)
         if progress:
@@ -248,6 +249,19 @@ class DatasetBuilder:
         except (FotMobError, KeyError, IndexError, TypeError):
             pass
         return df
+
+
+def _add_derived_per90(df: pd.DataFrame) -> None:
+    """Add minutes-normalised per-90 columns for season-total stats so
+    percentiles compare rates, not playing time (in place)."""
+    if "mins_played" not in df.columns:
+        return
+    minutes = pd.to_numeric(df["mins_played"], errors="coerce")
+    for derived, source in config.DERIVED_PER90_METRICS.items():
+        if source not in df.columns:
+            continue
+        values = pd.to_numeric(df[source], errors="coerce")
+        df[derived] = (values / minutes.where(minutes > 0) * 90).round(3)
 
 
 def _group_from_label(label: str | None) -> str | None:
