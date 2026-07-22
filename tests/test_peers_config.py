@@ -34,15 +34,39 @@ class TestPositionMapping:
         assert _group_from_label(None) is None
 
 
-class TestSimilarLeagues:
-    def test_same_tier(self):
-        ids = config.similar_leagues(47, tier_spread=0)
-        assert 47 in ids and 87 in ids and 54 in ids
-        assert all(config.LEAGUES[i].tier == 1 for i in ids)
+class TestLeagueStrength:
+    def test_strength_ordering_is_sane(self):
+        s = {i: lg.strength for i, lg in config.LEAGUES.items()}
+        assert s[47] > s[87] > s[61] > s[64]  # EPL > LaLiga > Portugal > Scotland
+        assert s[268] > s[64]  # Brazil above Scotland
 
-    def test_tier_spread(self):
-        ids = config.similar_leagues(47, tier_spread=1)
-        assert 61 in ids  # Liga Portugal is tier 2
+    def test_strength_combines_sources(self):
+        epl = config.LEAGUES[47]
+        championship = config.LEAGUES[48]
+        assert epl.uefa_coefficient is not None and epl.opta_rating is not None
+        assert championship.uefa_coefficient is None  # second tier: Opta only
+        assert 0 < championship.strength < epl.strength <= 100
+
+    def test_tier_derived_from_strength(self):
+        assert config.LEAGUES[47].tier == 1
+        assert config.LEAGUES[67].tier == 4  # Allsvenskan
+
+
+class TestSimilarLeagues:
+    def test_target_league_first_and_big_five_together(self):
+        ids = config.similar_leagues(47, tier_spread=0)
+        assert ids[0] == 47
+        assert {47, 87, 54, 55, 53} <= set(ids)
+
+    def test_minimum_pool_size(self):
+        for lid in config.LEAGUES:
+            assert len(config.similar_leagues(lid, tier_spread=0)) >= 5
+
+    def test_wider_spread_grows_pool(self):
+        strict = config.similar_leagues(57, tier_spread=0)
+        broad = config.similar_leagues(57, tier_spread=2)
+        assert set(strict) <= set(broad)
+        assert len(broad) >= len(strict)
 
     def test_unknown_league(self):
         assert config.similar_leagues(99999) == [99999]

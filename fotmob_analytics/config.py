@@ -9,69 +9,124 @@ from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
-# Leagues and tiers
+# Leagues and strength model
 # ---------------------------------------------------------------------------
+#
+# League strength (0-100) blends two reputable sources:
+#
+# 1. UEFA 5-year country coefficients (2021/22-2025/26 sums, uefa.com /
+#    kassiesa.net, retrieved July 2026). These only apply to the *top*
+#    division of each UEFA association.
+# 2. Opta Power Rankings league averages (theanalyst.com, 2025-2026 updates),
+#    which cover second divisions and non-UEFA leagues too. Values marked with
+#    a trailing comment are interpolated estimates from Opta's published
+#    ordering where an exact figure wasn't published.
+#
+# Each source is normalised to 0-100 and the available components are
+# averaged. Update the raw numbers here as new rankings are published.
+
+_UEFA_COEFF_MAX = 119.519  # England, 2026 ranking
+
+# Anchors for Opta Power Rating normalisation (league average club rating).
+_OPTA_LO, _OPTA_HI = 60.0, 92.0
+
 
 @dataclass(frozen=True)
 class League:
     id: int
     name: str
     country: str
-    tier: int  # 1 = strongest
+    uefa_coefficient: float | None = None  # 5yr country coeff (top flights only)
+    opta_rating: float | None = None  # Opta Power Rankings league average
+
+    @property
+    def strength(self) -> float:
+        """Composite 0-100 strength score (mean of available sources)."""
+        parts = []
+        if self.uefa_coefficient is not None:
+            parts.append(100.0 * self.uefa_coefficient / _UEFA_COEFF_MAX)
+        if self.opta_rating is not None:
+            parts.append(
+                100.0 * (self.opta_rating - _OPTA_LO) / (_OPTA_HI - _OPTA_LO)
+            )
+        return round(sum(parts) / len(parts), 1) if parts else 0.0
+
+    @property
+    def tier(self) -> int:
+        """Coarse band derived from strength: 1 elite, 2 strong, 3 solid, 4 smaller."""
+        s = self.strength
+        if s >= 70:
+            return 1
+        if s >= 50:
+            return 2
+        if s >= 35:
+            return 3
+        return 4
 
 
-# Tier bands are a pragmatic strength grouping used to pick "similar level"
-# leagues for cross-league peer pools.
 LEAGUES: dict[int, League] = {
-    # Tier 1 — elite European leagues
-    47: League(47, "Premier League", "ENG", 1),
-    87: League(87, "LaLiga", "ESP", 1),
-    54: League(54, "Bundesliga", "GER", 1),
-    55: League(55, "Serie A", "ITA", 1),
-    53: League(53, "Ligue 1", "FRA", 1),
-    # Tier 2 — strong European leagues / top second divisions
-    61: League(61, "Liga Portugal", "POR", 2),
-    57: League(57, "Eredivisie", "NED", 2),
-    40: League(40, "First Division A", "BEL", 2),
-    71: League(71, "Süper Lig", "TUR", 2),
-    48: League(48, "Championship", "ENG", 2),
-    # Tier 3 — solid leagues worldwide / European second divisions
-    268: League(268, "Serie A (Brazil)", "BRA", 3),
-    112: League(112, "Liga Profesional", "ARG", 3),
-    130: League(130, "MLS", "USA", 3),
-    230: League(230, "Liga MX", "MEX", 3),
-    64: League(64, "Premiership", "SCO", 3),
-    146: League(146, "2. Bundesliga", "GER", 3),
-    140: League(140, "LaLiga2", "ESP", 3),
-    86: League(86, "Serie B (Italy)", "ITA", 3),
-    110: League(110, "Ligue 2", "FRA", 3),
-    # Tier 4 — smaller European leagues
-    46: League(46, "Superligaen", "DEN", 4),
-    69: League(69, "Super League", "SUI", 4),
-    38: League(38, "Bundesliga (Austria)", "AUT", 4),
-    135: League(135, "Super League 1", "GRE", 4),
-    252: League(252, "HNL", "CRO", 4),
-    122: League(122, "1. Liga", "CZE", 4),
-    59: League(59, "Eliteserien", "NOR", 4),
-    67: League(67, "Allsvenskan", "SWE", 4),
-    196: League(196, "Ekstraklasa", "POL", 4),
-    223: League(223, "J. League", "JPN", 4),
+    # UEFA top flights (coefficient + Opta average)
+    47: League(47, "Premier League", "ENG", 119.519, 91.0),
+    55: League(55, "Serie A", "ITA", 99.946, 87.0),
+    87: League(87, "LaLiga", "ESP", 97.046, 87.0),
+    54: League(54, "Bundesliga", "GER", 92.902, 86.3),
+    53: League(53, "Ligue 1", "FRA", 83.498, 82.5),
+    61: League(61, "Liga Portugal", "POR", 73.166, 80.1),
+    57: League(57, "Eredivisie", "NED", 67.929, 77.3),
+    40: League(40, "First Division A", "BEL", 62.250, 79.2),
+    71: League(71, "Süper Lig", "TUR", 51.875, 76.0),   # Opta estimate
+    122: League(122, "1. Liga", "CZE", 48.525, None),
+    135: League(135, "Super League 1", "GRE", 48.412, 73.6),
+    196: League(196, "Ekstraklasa", "POL", 46.750, None),
+    46: League(46, "Superligaen", "DEN", 42.106, 74.0),  # Opta estimate
+    59: League(59, "Eliteserien", "NOR", 41.237, None),
+    69: League(69, "Super League", "SUI", 34.700, 73.0),  # Opta estimate
+    38: League(38, "Bundesliga (Austria)", "AUT", 33.850, 73.0),  # Opta estimate
+    64: League(64, "Premiership", "SCO", 32.050, 70.5),  # Opta estimate
+    67: League(67, "Allsvenskan", "SWE", 29.625, None),
+    252: League(252, "HNL", "CRO", 28.156, None),
+    # Second divisions (Opta only; UEFA coefficients don't apply)
+    48: League(48, "Championship", "ENG", None, 78.4),
+    146: League(146, "2. Bundesliga", "GER", None, 74.5),  # Opta estimate
+    140: League(140, "LaLiga2", "ESP", None, 73.5),  # Opta estimate
+    86: League(86, "Serie B (Italy)", "ITA", None, 72.0),  # Opta estimate
+    110: League(110, "Ligue 2", "FRA", None, 72.5),  # Opta estimate
+    # Non-UEFA leagues (Opta only)
+    268: League(268, "Serie A (Brazil)", "BRA", None, 80.8),
+    112: League(112, "Liga Profesional", "ARG", None, 78.6),
+    230: League(230, "Liga MX", "MEX", None, 76.7),
+    130: League(130, "MLS", "USA", None, 76.6),
+    223: League(223, "J. League", "JPN", None, 74.0),  # Opta estimate
 }
+
+# Strength-distance windows for "similar level" league pools, indexed by the
+# ``tier_spread`` knob (0 = strict, 1 = broader, 2 = very broad).
+_STRENGTH_WINDOWS = {0: 15.0, 1: 25.0, 2: 40.0}
+_MIN_SIMILAR_LEAGUES = 5
 
 
 def similar_leagues(league_id: int, tier_spread: int = 0) -> list[int]:
-    """League ids in the same tier band as ``league_id`` (within ``tier_spread``)."""
+    """Leagues of similar strength to ``league_id``, nearest first.
+
+    Includes every league within the strength window for ``tier_spread``
+    and always at least :data:`_MIN_SIMILAR_LEAGUES` nearest leagues, so
+    outliers (e.g. the Premier League) still get a meaningful pool.
+    """
     base = LEAGUES.get(league_id)
     if base is None:
         return [league_id]
+    window = _STRENGTH_WINDOWS.get(tier_spread, _STRENGTH_WINDOWS[2])
+    by_distance = sorted(
+        LEAGUES.values(), key=lambda lg: abs(lg.strength - base.strength)
+    )
     ids = [
         lg.id
-        for lg in LEAGUES.values()
-        if abs(lg.tier - base.tier) <= tier_spread
+        for i, lg in enumerate(by_distance)
+        if abs(lg.strength - base.strength) <= window or i < _MIN_SIMILAR_LEAGUES
     ]
-    if league_id not in ids:
-        ids.insert(0, league_id)
-    return ids
+    if league_id in ids:
+        ids.remove(league_id)
+    return [league_id] + ids
 
 
 # ---------------------------------------------------------------------------
