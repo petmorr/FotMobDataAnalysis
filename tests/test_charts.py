@@ -126,11 +126,11 @@ class TestPlayerCard:
         texts = [a.text for a in fig.layout.annotations]
         assert any("A. Player" in t for t in texts)
         assert any("Touchline Winger" in t for t in texts)
-        assert any("Market value" in t for t in texts)
+        assert any("€50.0m" in t for t in texts)
         assert any("KEY ATTRIBUTES" in t for t in texts)
         assert any("63 wingers" in t for t in texts)
         assert len(fig.layout.images) == 1  # photo
-        # bar shapes exist (track + fill per metric, plus frame and badge)
+        # bar shapes exist (track + fill per metric, plus column divider)
         assert len(fig.layout.shapes) >= 2 * len(profile_a) + 1
 
     def test_card_without_optionals(self, profile_a):

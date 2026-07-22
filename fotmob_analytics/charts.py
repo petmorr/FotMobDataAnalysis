@@ -588,62 +588,78 @@ def player_card_figure(
 
     fig = go.Figure()
 
-    # ---- right side: key attribute bars (x domain 0.42-1.0) ----
-    bar_x0, bar_x1 = 0.46, 0.99
+    # ---- right side: attribute rows (SofaScore-style: label | bar | value) --
+    # Each attribute occupies one row: metric name + value on the left of the
+    # column, the percentile bar and number on the right. Nothing stacks, so
+    # rows can never collide regardless of count.
+    col_x = 0.40          # divider between identity and attributes
+    label_x = col_x + 0.03
+    bar_x0, bar_x1 = 0.70, 0.945
+    pct_x = 0.955
     n = len(rows)
-    y_top, y_bottom = 0.66, 0.06
+    y_top, y_bottom = 0.80, 0.04
     slot = (y_top - y_bottom) / max(n, 1)
+    bar_h = min(0.030, slot * 0.28)
     for i, (_, row) in enumerate(rows.iterrows()):
         y = y_bottom + slot * (i + 0.5)
         pct = float(row["percentile"])
         color = _pct_color(pct)
-        # track
+        fig.add_annotation(
+            xref="paper", yref="paper", x=label_x, y=y,
+            text=(
+                f"{_short_title(row['title'])}  "
+                f"<b>{round(float(row['value']), 2):g}</b>"
+            ),
+            showarrow=False, font=dict(size=12.5, color="#334155"),
+            xanchor="left", yanchor="middle",
+        )
         fig.add_shape(
             type="rect", xref="paper", yref="paper",
-            x0=bar_x0, x1=bar_x1, y0=y - 0.022, y1=y + 0.022,
+            x0=bar_x0, x1=bar_x1, y0=y - bar_h, y1=y + bar_h,
             fillcolor="#eef0f5", line_width=0, layer="below",
         )
-        # fill
         fig.add_shape(
             type="rect", xref="paper", yref="paper",
             x0=bar_x0, x1=bar_x0 + (bar_x1 - bar_x0) * pct / 100.0,
-            y0=y - 0.022, y1=y + 0.022,
+            y0=y - bar_h, y1=y + bar_h,
             fillcolor=color, line_width=0, layer="below",
         )
         fig.add_annotation(
-            xref="paper", yref="paper", x=bar_x0, y=y + 0.055,
-            text=f"{row['title']}  ·  <b>{round(float(row['value']), 2):g}</b>",
-            showarrow=False, font=dict(size=12, color="#334155"),
-            xanchor="left", yanchor="middle",
-        )
-        fig.add_annotation(
-            xref="paper", yref="paper", x=bar_x1, y=y,
+            xref="paper", yref="paper", x=pct_x, y=y,
             text=f"<b>{pct:.0f}</b>", showarrow=False,
-            font=dict(size=12, color="#0f172a"), xanchor="left", yanchor="middle",
+            font=dict(size=12.5, color="#0f172a"), xanchor="left",
+            yanchor="middle",
         )
     fig.add_annotation(
-        xref="paper", yref="paper", x=bar_x0, y=y_top + 0.13,
-        text="<b>KEY ATTRIBUTES</b>  <span style='color:#94a3b8'>(percentile)</span>",
-        showarrow=False, font=dict(size=12, color="#0f172a"),
+        xref="paper", yref="paper", x=label_x, y=0.93,
+        text="<b>KEY ATTRIBUTES</b>  <span style='color:#94a3b8'>· percentile vs peer group</span>",
+        showarrow=False, font=dict(size=12.5, color="#0f172a"),
         xanchor="left",
+    )
+    # column divider
+    fig.add_shape(
+        type="line", xref="paper", yref="paper",
+        x0=col_x, x1=col_x, y0=0.0, y1=1.0,
+        line=dict(color="#e2e8f0", width=1),
     )
 
     # ---- left side: identity block ----
-    left_x = 0.02 if photo_url is None else 0.17
+    text_x = 0.115 if photo_url else 0.0
     name = personal.get("name", "")
     fig.add_annotation(
-        xref="paper", yref="paper", x=left_x, y=0.93,
+        xref="paper", yref="paper", x=text_x, y=0.94,
         text=f"<b>{name}</b>", showarrow=False,
-        font=dict(size=20, color="#0f172a"), xanchor="left",
+        font=dict(size=20, color="#0f172a"), xanchor="left", yanchor="middle",
     )
-    lines: list[str] = []
-    if personal.get("age"):
-        lines.append(f"{personal['age']} yrs")
-    if personal.get("position"):
-        lines.append(str(personal["position"]))
-    line1 = " · ".join(lines)
     facts = [
-        line1 or None,
+        " · ".join(
+            str(x)
+            for x in (
+                f"{personal['age']} yrs" if personal.get("age") else None,
+                personal.get("position"),
+            )
+            if x
+        ) or None,
         " · ".join(
             str(x) for x in (personal.get("team"), personal.get("league")) if x
         ) or None,
@@ -652,89 +668,85 @@ def player_card_figure(
             for x in (
                 personal.get("country"),
                 f"{personal['height']} cm" if personal.get("height") else None,
+                f"€{personal['market_value'] / 1e6:.1f}m"
+                if personal.get("market_value") else None,
             )
             if x
         ) or None,
-        f"Market value €{personal['market_value'] / 1e6:.1f}m"
-        if personal.get("market_value") else None,
         " · ".join(
             str(x)
             for x in (
                 f"{int(personal['minutes'])} mins" if personal.get("minutes") else None,
-                f"rating {personal['rating']:.2f}" if personal.get("rating") else None,
+                f"{personal['rating']:.2f} rating" if personal.get("rating") else None,
             )
             if x
         ) or None,
     ]
-    y = 0.84
+    y = 0.83
     for fact in facts:
         if not fact:
             continue
         fig.add_annotation(
-            xref="paper", yref="paper", x=left_x, y=y, text=fact,
+            xref="paper", yref="paper", x=text_x, y=y, text=fact,
             showarrow=False, font=dict(size=12.5, color="#475569"),
-            xanchor="left",
+            xanchor="left", yanchor="middle",
         )
-        y -= 0.075
+        y -= 0.085
 
-    # role banner
+    # role line, aligned to the left edge under the photo
+    role_y = 0.40
     if role_name:
-        qualifier = {"clear": "", "leaning": " (leaning)", "mixed": " (mixed profile)"}
+        qualifier = {"clear": "", "leaning": " · leaning", "mixed": " · mixed profile"}
         fig.add_annotation(
-            xref="paper", yref="paper", x=0.02, y=y - 0.05,
-            text=f"🎯 <b>{role_name}</b>{qualifier.get(role_confidence or '', '')}",
-            showarrow=False, font=dict(size=13, color="#0f172a"), xanchor="left",
+            xref="paper", yref="paper", x=0.0, y=role_y,
+            text=(
+                "<span style='color:#94a3b8'>ROLE TYPE</span>  "
+                f"<b>{role_name}</b>"
+                f"<span style='color:#64748b'>{qualifier.get(role_confidence or '', '')}</span>"
+            ),
+            showarrow=False, font=dict(size=13, color="#0f172a"),
+            xanchor="left", yanchor="middle",
         )
-        y -= 0.13
 
-    # role score badge
+    # role score: big number + caption (no shapes, so it never distorts)
     if role_score is not None:
         badge_color = _pct_color(role_score)
-        fig.add_shape(
-            type="circle", xref="paper", yref="paper",
-            x0=0.02, x1=0.135, y0=y - 0.30, y1=y - 0.02,
-            fillcolor=badge_color, line=dict(color="white", width=2),
-        )
         fig.add_annotation(
-            xref="paper", yref="paper", x=0.0775, y=y - 0.13,
+            xref="paper", yref="paper", x=0.0, y=0.22,
             text=f"<b>{role_score:.0f}</b>",
-            showarrow=False,
-            font=dict(size=22, color=_text_color_for(badge_color)),
+            showarrow=False, font=dict(size=40, color=badge_color),
+            xanchor="left", yanchor="middle",
         )
         fig.add_annotation(
-            xref="paper", yref="paper", x=0.155, y=y - 0.13,
-            text="Role score<br>vs peer group", showarrow=False,
-            font=dict(size=11, color="#475569"), xanchor="left",
+            xref="paper", yref="paper", x=0.085, y=0.22,
+            text="<span style='color:#94a3b8'>/100</span><br>"
+                 "<span style='color:#475569'>role score vs peer group</span>",
+            showarrow=False, font=dict(size=11.5),
+            xanchor="left", yanchor="middle", align="left",
         )
 
     # footer: peer group context
     fig.add_annotation(
-        xref="paper", yref="paper", x=0.02, y=-0.02,
-        text=f"Peer group: {peer_label}",
-        showarrow=False, font=dict(size=11, color="#94a3b8"), xanchor="left",
+        xref="paper", yref="paper", x=0.0, y=0.01,
+        text=f"<span style='color:#94a3b8'>Peer group: {peer_label}</span>",
+        showarrow=False, font=dict(size=11), xanchor="left", yanchor="middle",
     )
 
     if photo_url:
         fig.add_layout_image(
             dict(source=photo_url, xref="paper", yref="paper",
-                 x=0.0, y=0.98, sizex=0.13, sizey=0.30,
+                 x=0.0, y=1.0, sizex=0.095, sizey=0.30,
                  xanchor="left", yanchor="top", layer="above")
         )
 
-    # card frame
-    fig.add_shape(
-        type="rect", xref="paper", yref="paper", x0=-0.01, x1=1.005,
-        y0=-0.06, y1=1.02, line=dict(color="#e2e8f0", width=1.5),
-        fillcolor="rgba(0,0,0,0)", layer="below",
-    )
     fig.update_layout(
         xaxis=dict(visible=False, range=[0, 1]),
         yaxis=dict(visible=False, range=[0, 1]),
         font=FONT,
         plot_bgcolor=PAPER,
         paper_bgcolor=PAPER,
-        margin=dict(l=20, r=45, t=20, b=25),
-        height=380,
+        margin=dict(l=30, r=30, t=18, b=14),
+        height=400,
         showlegend=False,
     )
     return fig
