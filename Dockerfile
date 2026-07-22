@@ -11,6 +11,10 @@ COPY app.py .
 COPY .streamlit ./.streamlit
 RUN pip install --no-cache-dir --no-deps .
 
+# Run as an unprivileged user; the FotMob response cache lives in its home.
+RUN useradd --create-home --shell /usr/sbin/nologin appuser
+USER appuser
+
 EXPOSE 8501
 HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
 
