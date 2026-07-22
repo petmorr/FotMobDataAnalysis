@@ -2,4 +2,6 @@ pandas>=2.0
 numpy>=1.24
 matplotlib>=3.7
 requests>=2.31
+plotly>=5.18
+streamlit>=1.38
 pytest~=9.1.1
