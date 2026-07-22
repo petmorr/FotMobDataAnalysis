@@ -87,6 +87,7 @@ class DetailedStats:
     league_id: int
     season: str
     table: pd.DataFrame  # columns: group, title, key, value, per90, percentile
+    shotmap: pd.DataFrame | None = None  # columns: x, y, xg, event, situation, minute
 
     def features(self) -> dict[str, float]:
         """Canonical feature -> pseudo z-score derived from FotMob's per-90
@@ -144,7 +145,34 @@ def parse_player_stats(
         league_id=league_id,
         season=season,
         table=pd.DataFrame(records),
+        shotmap=_parse_shotmap(payload.get("shotmap")),
     )
+
+
+def _parse_shotmap(shots: list | None) -> pd.DataFrame | None:
+    """Flatten FotMob's shotmap events (pitch coords are metres on a 105x68
+    pitch, attacking left-to-right)."""
+    if not shots:
+        return None
+    records = []
+    for shot in shots:
+        if shot.get("isOwnGoal"):
+            continue
+        records.append(
+            {
+                "x": shot.get("x"),
+                "y": shot.get("y"),
+                "xg": shot.get("expectedGoals") or 0.0,
+                "event": shot.get("eventType"),
+                "shot_type": shot.get("shotType"),
+                "situation": shot.get("situation"),
+                "minute": shot.get("min"),
+                "on_target": bool(shot.get("isOnTarget")),
+            }
+        )
+    if not records:
+        return None
+    return pd.DataFrame(records)
 
 
 def fetch_detailed_stats(
