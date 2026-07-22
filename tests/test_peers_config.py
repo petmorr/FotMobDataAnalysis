@@ -101,7 +101,7 @@ class TestPeerSpec:
     def test_league_ids_cross_league(self):
         spec = PeerSpec(league_id=47, include_cross_league=True, tier_spread=0)
         assert set(spec.league_ids()) == {
-            i for i, l in config.LEAGUES.items() if l.tier == 1
+            i for i, lg in config.LEAGUES.items() if lg.tier == 1
         }
         spec2 = PeerSpec(league_id=47, include_cross_league=False)
         assert spec2.league_ids() == [47]
