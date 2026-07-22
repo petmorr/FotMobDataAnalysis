@@ -13,10 +13,12 @@ from fotmob_analytics.analysis import PlayerAnalyzer, PlayerContext, SeasonProfi
 from fotmob_analytics.charts import (
     archetype_figure,
     comparison_figure,
+    comparison_radar_figure,
     detailed_stats_figure,
     key_differences,
     percentile_bar_figure,
-    radar_figure,
+    pizza_figure,
+    shot_map_figure,
 )
 from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
 from fotmob_analytics.peers import PeerSpec
@@ -94,6 +96,7 @@ def role_profile(ctx: dict, season: str | None) -> dict | None:
         "primary_description": role.primary.description,
         "table": detailed.table,
         "season": detailed.season,
+        "shotmap": detailed.shotmap,
     }
 
 
@@ -246,14 +249,19 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
             "explain some percentile gaps below."
         )
 
-    st.plotly_chart(
-        comparison_figure(
-            base.profile, other_sp.profile,
-            f"{ctx['name']} ({base.season})",
-            f"{other['name']} ({other_sp.season})",
-        ),
-        width="stretch",
-    )
+    label_a = f"{ctx['name']} ({base.season})"
+    label_b = f"{other['name']} ({other_sp.season})"
+    tab_metrics, tab_radar = st.tabs(["📊 Metric by metric", "🕸 Radar overlay"])
+    with tab_metrics:
+        st.plotly_chart(
+            comparison_figure(base.profile, other_sp.profile, label_a, label_b),
+            width="stretch",
+        )
+    with tab_radar:
+        st.plotly_chart(
+            comparison_radar_figure(base.profile, other_sp.profile, label_a, label_b),
+            width="stretch",
+        )
     diffs = key_differences(base.profile, other_sp.profile, ctx["name"], other["name"])
     if not diffs.empty:
         st.subheader("Key differences")
@@ -459,21 +467,42 @@ with st.spinner("Classifying role type..."):
     role = role_profile(ctx, base.season)
 player_header(ctx, base.season, role)
 
+# KPI cards (headline numbers before any charts)
+mins = base.row.get("mins_played")
+kpis = st.columns(5)
+kpis[0].metric("Role score", score_text(base.role_score),
+               help="Weighted percentile average vs league position peers.")
+kpis[1].metric("FotMob rating", f"{base.row.get('rating'):.2f}"
+               if pd.notna(base.row.get("rating")) else "—")
+kpis[2].metric("Goals", int(base.row.get("goals"))
+               if pd.notna(base.row.get("goals")) else 0)
+kpis[3].metric("Assists", int(base.row.get("goal_assist"))
+               if pd.notna(base.row.get("goal_assist")) else 0)
+kpis[4].metric("Minutes", int(mins) if pd.notna(mins) else "—")
+if pd.notna(mins) and mins < 900:
+    st.warning(
+        f"Small sample: only {int(mins)} minutes played this season — "
+        "percentiles can be noisy below ~900 minutes."
+    )
+
+peer_label = (
+    f"{len(base.peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s "
+    f"in {ctx['league_name']}"
+)
 c1, c2 = st.columns([3, 2])
 with c1:
     st.subheader("Percentile profile")
-    peer_label = (
-        f"{len(base.peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s "
-        f"in {ctx['league_name']}"
+    st.plotly_chart(
+        percentile_bar_figure(base.profile, peer_label, color_by="category"),
+        width="stretch",
     )
-    st.plotly_chart(percentile_bar_figure(base.profile, peer_label), width="stretch")
     profile_download(
         base.profile, f"profile_{ctx['player_id']}.csv", "Download profile (CSV)"
     )
 with c2:
     st.subheader("Overview")
-    st.metric("Role score vs league peers", score_text(base.role_score))
-    st.plotly_chart(radar_figure(base.profile, ctx["name"]), width="stretch")
+    st.plotly_chart(pizza_figure(base.profile, ctx["name"], peer_label),
+                    width="stretch")
     strengths_weaknesses_lists(base.profile)
 
 # ---- Section 2b: role profile and in-depth stats ---------------------------
@@ -498,17 +527,34 @@ if role is not None:
                 "types, so judge them across archetypes rather than by one label."
             )
     with col_detail:
-        st.markdown("**In-depth season stats** (FotMob percentile vs same-position league peers)")
-        groups = list(role["table"]["group"].dropna().unique())
-        chosen = st.multiselect("Stat groups", groups, default=groups,
-                                label_visibility="collapsed")
-        table = role["table"][role["table"]["group"].isin(chosen)]
-        if not table.dropna(subset=["percentile"]).empty:
-            st.plotly_chart(detailed_stats_figure(table), width="stretch")
-        profile_download(
-            role["table"], f"detailed_{ctx['player_id']}.csv",
-            "Download in-depth stats (CSV)",
-        )
+        shotmap = role.get("shotmap")
+        if shotmap is not None and len(shotmap) >= 3:
+            tab_stats, tab_shots = st.tabs(["📊 In-depth stats", "🥅 Shot map"])
+        else:
+            (tab_stats,) = st.tabs(["📊 In-depth stats"])
+            tab_shots = None
+        with tab_stats:
+            st.caption("FotMob percentile vs same-position league peers")
+            groups = list(role["table"]["group"].dropna().unique())
+            chosen = st.multiselect("Stat groups", groups, default=groups,
+                                    label_visibility="collapsed")
+            table = role["table"][role["table"]["group"].isin(chosen)]
+            if not table.dropna(subset=["percentile"]).empty:
+                st.plotly_chart(detailed_stats_figure(table), width="stretch")
+            profile_download(
+                role["table"], f"detailed_{ctx['player_id']}.csv",
+                "Download in-depth stats (CSV)",
+            )
+        if tab_shots is not None:
+            with tab_shots:
+                st.plotly_chart(
+                    shot_map_figure(shotmap, ctx["name"], role["season"]),
+                    width="stretch",
+                )
+                st.caption(
+                    "Marker size scales with xG; green = goal. League matches "
+                    "in the selected season."
+                )
 
 # ---- Section 3: evaluation --------------------------------------------------
 
@@ -536,5 +582,9 @@ with st.expander("Methodology & data sources"):
 - **Similarity** is cosine similarity over z-scored role metrics.
 - **Ages** come from current squad data, so historical seasons use players'
   current ages.
+- **Visual conventions** follow the standards of leading scouting tools:
+  FBref/StatsBomb-style pizza charts and phase-of-play colour groups
+  (attacking / creation / possession / defending), StatsBomb-style overlay
+  radars for comparisons, and Understat-style xG shot maps.
 """
     )
