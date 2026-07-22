@@ -114,7 +114,12 @@ def percentile_bar_figure(
 
 def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure:
     """FBref/StatsBomb-style pizza chart: one wedge per metric, wedge length =
-    percentile, colour = phase of play, percentile value shown on each slice."""
+    percentile, colour = phase of play, percentile value shown on each slice.
+
+    The title is intentionally NOT rendered inside the figure — callers should
+    place their own heading above the chart so nothing collides with the
+    wedges or gets clipped.
+    """
     data = _clean(profile)
     if data.empty:
         raise ValueError("profile has no percentiles to plot")
@@ -149,10 +154,12 @@ def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure
             showlegend=False,
         )
     )
-    # percentile value bubbles at the wedge tips (mplsoccer style)
+    # percentile value bubbles at the wedge tips (mplsoccer style), clamped
+    # away from both the centre (crowding) and the rim (clipping)
     fig.add_trace(
         go.Scatterpolar(
-            r=[max(p, 7) for p in pct], theta=theta, mode="markers+text",
+            r=[min(max(p, 14.0), 86.0) for p in pct], theta=theta,
+            mode="markers+text",
             marker=dict(size=21, color=colors, line=dict(color="white", width=1.5)),
             text=[f"<b>{p:.0f}</b>" for p in pct],
             textfont=dict(size=10, color=[_text_color_for(c) for c in colors]),
@@ -179,18 +186,12 @@ def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure
             ),
             bgcolor=PAPER,
         ),
-        title=dict(
-            text=(
-                f"<b>{name}</b><br>"
-                f"<sup>{_wrap_label('Percentile rank vs ' + peer_label, 44)}</sup>"
-            ),
-            x=0.5, font=dict(size=15),
-        ),
         font=FONT,
         paper_bgcolor=PAPER,
-        legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
-        margin=dict(l=70, r=70, t=80, b=60),
-        height=520,
+        legend=dict(orientation="h", y=-0.12, x=0.5, xanchor="center",
+                    font=dict(size=11)),
+        margin=dict(l=80, r=80, t=40, b=50),
+        height=500,
     )
     return fig
 

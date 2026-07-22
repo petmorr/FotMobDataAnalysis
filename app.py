@@ -504,6 +504,7 @@ with c1:
     )
 with c2:
     st.subheader("Overview")
+    st.caption(f"{ctx['name']} — percentile rank vs {peer_label}")
     st.plotly_chart(pizza_figure(base.profile, ctx["name"], peer_label),
                     width="stretch")
     strengths_weaknesses_lists(base.profile)
@@ -575,8 +576,15 @@ with st.expander("Methodology & data sources"):
 - **Data** comes from FotMob's public API (season deep stats, squads, player
   pages) and is cached locally for 6 hours (30 days for finished seasons).
 - **Percentiles** are rank-based; ties land mid-band. Metrics where lower is
-  better (fouls, big chances missed, goals conceded...) are flipped so higher
-  percentile always means better.
+  better (goals conceded...) are flipped so higher percentile always means
+  better.
+- **Metric selection** is deliberately opinionated: profiles use only per-90
+  or rate/quality metrics, prioritising repeatable *process* measures (xG,
+  xA, xGOT per 90, chance creation rates, ball-winning rates) over raw
+  outcomes. Season totals are converted to per-90 across the whole peer pool
+  so percentiles compare performance, not playing time. Low-signal stats
+  (fouls, cards, penalties, FotMob rating) are excluded from profiles and
+  role scores — rating is shown separately as a KPI.
 - **Role scores** (0-100) are weighted means of percentiles using
   position-specific weights (see `fotmob_analytics/config.py`).
 - **League strength** blends the normalised UEFA 5-year country coefficient
