@@ -66,3 +66,10 @@ def test_pct_color_scale():
     assert charts._pct_color(0) == "rgb(198, 40, 40)"
     assert charts._pct_color(100) == "rgb(27, 138, 90)"
     assert charts._pct_color(None) == "#cccccc"
+
+
+def test_short_title():
+    assert charts._short_title("Successful dribbles per 90") == "Dribbles/90"
+    assert charts._short_title("Goals per 90") == "Goals/90"
+    long = charts._short_title("An extremely long metric title indeed")
+    assert len(long) <= 20

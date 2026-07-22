@@ -6,7 +6,6 @@ remains for CLI PNG export.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -166,10 +165,26 @@ def comparison_figure(
     return fig
 
 
+def _short_title(title: str) -> str:
+    """Compact label for the radar chart's angular axis."""
+    short = (
+        title.replace(" per 90", "/90")
+        .replace(" per match", "/match")
+        .replace("Possession won final 3rd", "Poss. won f3rd")
+        .replace("Successful dribbles", "Dribbles")
+        .replace("Shots on target", "Shots on tgt")
+        .replace("Accurate passes", "Acc. passes")
+        .replace("Accurate long balls", "Acc. long balls")
+        .replace("Fouls committed", "Fouls")
+        .replace("Defensive actions", "Def. actions")
+    )
+    return short if len(short) <= 20 else short[:19] + "…"
+
+
 def radar_figure(profile: pd.DataFrame, name: str) -> go.Figure:
     """Compact polar overview of a percentile profile."""
     data = _clean(profile)
-    theta = data["title"].tolist()
+    theta = data["title"].map(_short_title).tolist()
     r = data["percentile"].astype(float).tolist()
     fig = go.Figure(
         go.Scatterpolar(
