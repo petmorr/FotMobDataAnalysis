@@ -22,6 +22,7 @@ from fotmob_analytics.charts import (
 )
 from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
 from fotmob_analytics.peers import PeerSpec
+from fotmob_analytics.util import md_escape, safe_csv_bytes
 
 st.set_page_config(
     page_title="FotMob Analytics",
@@ -150,16 +151,17 @@ def player_picker(label: str, key: str, container=None) -> dict | None:
 def player_header(ctx: dict, season: str, role: dict | None = None) -> None:
     photo, info = st.columns([1, 8])
     with photo:
-        st.image(player_image_url(ctx["player_id"]), width=110)
+        st.image(player_image_url(ctx["player_id"]), width=110,
+                 caption=ctx["name"])
     with info:
-        st.markdown(f"## {ctx['name']}")
+        st.markdown(f"## {md_escape(ctx['name'])}")
         chips = [
             f"**{ctx['age']}** yrs" if ctx.get("age") else None,
             config.GROUP_LABELS.get(ctx["position_group"]),
-            ctx.get("team"),
-            ctx.get("league_name"),
+            md_escape(ctx["team"]) if ctx.get("team") else None,
+            md_escape(ctx["league_name"]) if ctx.get("league_name") else None,
             f"€{ctx['market_value'] / 1e6:.1f}m" if ctx.get("market_value") else None,
-            ctx.get("country"),
+            md_escape(ctx["country"]) if ctx.get("country") else None,
         ]
         st.markdown(" · ".join(c for c in chips if c))
         if role is not None:
@@ -202,7 +204,7 @@ def strengths_weaknesses_lists(profile: pd.DataFrame, container=None) -> None:
 
 def profile_download(profile: pd.DataFrame, filename: str, label: str) -> None:
     st.download_button(
-        label, profile.to_csv(index=False).encode(), file_name=filename,
+        label, safe_csv_bytes(profile), file_name=filename,
         mime="text/csv", key=f"dl_{filename}",
     )
 
@@ -244,9 +246,10 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
     role_b = role_profile(other, other_sp.season)
     if role_a and role_b and role_a["primary_name"] != role_b["primary_name"]:
         st.caption(
-            f"Style note: {ctx['name']} profiles as a **{role_a['primary_name']}**, "
-            f"{other['name']} as a **{role_b['primary_name']}** — role differences "
-            "explain some percentile gaps below."
+            f"Style note: {md_escape(ctx['name'])} profiles as a "
+            f"**{role_a['primary_name']}**, {md_escape(other['name'])} as a "
+            f"**{role_b['primary_name']}** — role differences explain some "
+            "percentile gaps below."
         )
 
     label_a = f"{ctx['name']} ({base.season})"
@@ -267,8 +270,8 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
         st.subheader("Key differences")
         for _, d in diffs.iterrows():
             st.markdown(
-                f"- **{d['title']}** — {d['leader']} leads by "
-                f"{d['gap']:.0f} percentile points ({d['detail']})"
+                f"- **{d['title']}** — {md_escape(d['leader'])} leads by "
+                f"{d['gap']:.0f} percentile points ({md_escape(d['detail'])})"
             )
     else:
         st.caption("No major percentile gaps — very similar profiles.")
@@ -360,7 +363,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         exclude_player_ids={ctx["player_id"]},
     )
     peers = spec.apply(pool)
-    if lo is not None:
+    if lo is not None:  # exact slider range (PeerSpec bands are symmetric)
         ages = pd.to_numeric(peers["age"], errors="coerce")
         peers = peers[ages.between(lo, hi)]
     if len(peers) < 5:

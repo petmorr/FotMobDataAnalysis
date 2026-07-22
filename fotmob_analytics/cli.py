@@ -25,6 +25,7 @@ from fotmob_analytics.analysis import PlayerAnalyzer
 from fotmob_analytics.client import FotMobClient, FotMobError
 from fotmob_analytics.dataset import DatasetBuilder
 from fotmob_analytics.team import TeamAnalyzer
+from fotmob_analytics.util import safe_csv_bytes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,7 +261,8 @@ def cmd_export(args: argparse.Namespace, client: FotMobClient) -> int:
         print(f"No data for league {args.league_id}", file=sys.stderr)
         return 1
     out = args.out or f"league_{args.league_id}_players.csv"
-    df.to_csv(out, index=False)
+    with open(out, "wb") as fh:
+        fh.write(safe_csv_bytes(df))
     print(f"Wrote {len(df)} players to {out}")
     return 0
 
