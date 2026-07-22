@@ -36,6 +36,18 @@ class PlayerContext:
 
 
 @dataclass
+class SeasonProfile:
+    """A player's stats row, same-position league peers and percentile
+    profile for one league season — the base unit of every comparison."""
+
+    row: pd.Series
+    peers: pd.DataFrame
+    profile: pd.DataFrame
+    season: str
+    role_score: float | None
+
+
+@dataclass
 class ScoutingReport:
     context: PlayerContext
     season: str
@@ -257,6 +269,44 @@ class PlayerAnalyzer:
             market_value=market_value,
             country=country,
             height=height,
+        )
+
+    def season_profile(
+        self,
+        ctx: PlayerContext,
+        season: str | int | None = None,
+        min_minutes: int = 450,
+        template: config.RoleTemplate | None = None,
+        extra_excluded_ids: set[int] | None = None,
+    ) -> SeasonProfile:
+        """Percentile-profile ``ctx`` against same-position peers from their
+        own league season. Raises :class:`FotMobError` if the player has no
+        stats for that season."""
+        if ctx.league_id is None:
+            raise FotMobError(f"{ctx.name} has no main league on FotMob")
+        if ctx.position_group is None:
+            raise FotMobError(f"Could not determine a position group for {ctx.name}")
+        template = template or config.ROLE_TEMPLATES[ctx.position_group]
+
+        pool = self.builder.league_player_table(ctx.league_id, season=season)
+        if pool.empty:
+            raise FotMobError(
+                f"No league stats for league {ctx.league_id} ({season=})"
+            )
+        row = _find_player_row(pool, ctx, ctx.player_id)
+        excluded = {ctx.player_id} | (extra_excluded_ids or set())
+        peers = pool[
+            (pool["position_group"] == ctx.position_group)
+            & (pool["mins_played"].fillna(0) >= min_minutes)
+            & (~pool["player_id"].isin(excluded))
+        ]
+        profile = metrics.percentile_profile(row, peers, template.metrics)
+        return SeasonProfile(
+            row=row,
+            peers=peers,
+            profile=profile,
+            season=str(pool["season"].iloc[0]),
+            role_score=metrics.role_score(profile, template.weights),
         )
 
     # -- reporting ------------------------------------------------------------

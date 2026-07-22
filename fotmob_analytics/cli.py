@@ -20,7 +20,7 @@ import sys
 
 import pandas as pd
 
-from fotmob_analytics import config, metrics
+from fotmob_analytics import config
 from fotmob_analytics.analysis import PlayerAnalyzer
 from fotmob_analytics.client import FotMobClient, FotMobError
 from fotmob_analytics.dataset import DatasetBuilder
@@ -162,8 +162,6 @@ def cmd_similar(args: argparse.Namespace, client: FotMobClient) -> int:
 
 def cmd_compare(args: argparse.Namespace, client: FotMobClient) -> int:
     analyzer = PlayerAnalyzer(client)
-    builder = analyzer.builder
-
     id_a = analyzer.resolve_player(args.player_a)
     id_b = analyzer.resolve_player(args.player_b)
     ctx_a = analyzer.player_context(id_a)
@@ -182,31 +180,23 @@ def cmd_compare(args: argparse.Namespace, client: FotMobClient) -> int:
 
     # Each player is profiled against their OWN league season's positional
     # peers, so comparisons across leagues/seasons measure relative dominance.
-    profiles: dict[int, pd.DataFrame] = {}
-    seasons: dict[int, str] = {}
+    results = {}
     for ctx, season_arg in ((ctx_a, args.season_a), (ctx_b, args.season_b)):
-        season = season_arg or args.season
-        pool = builder.league_player_table(ctx.league_id, season=season)
-        if pool.empty:
-            print(f"No stats for {ctx.name}'s league ({season=})", file=sys.stderr)
+        try:
+            results[ctx.player_id] = analyzer.season_profile(
+                ctx,
+                season=season_arg or args.season,
+                min_minutes=args.min_minutes,
+                template=template,
+                extra_excluded_ids={id_a, id_b},
+            )
+        except FotMobError as exc:
+            print(f"error: {exc}", file=sys.stderr)
             return 1
-        match = pool[pool["player_id"] == ctx.player_id]
-        if match.empty:
-            print(f"{ctx.name} has no stats in that season", file=sys.stderr)
-            return 1
-        peers = pool[
-            (pool["position_group"] == group)
-            & (pool["mins_played"].fillna(0) >= args.min_minutes)
-            & (~pool["player_id"].isin({id_a, id_b}))
-        ]
-        profiles[ctx.player_id] = metrics.percentile_profile(
-            match.iloc[0], peers, template.metrics
-        )
-        seasons[ctx.player_id] = str(pool["season"].iloc[0])
 
-    prof_a, prof_b = profiles[id_a], profiles[id_b]
-    score_a = metrics.role_score(prof_a, template.weights)
-    score_b = metrics.role_score(prof_b, template.weights)
+    prof_a, prof_b = results[id_a].profile, results[id_b].profile
+    score_a, score_b = results[id_a].role_score, results[id_b].role_score
+    seasons = {pid: sp.season for pid, sp in results.items()}
 
     pool_desc = (
         f"each vs own league {config.GROUP_LABELS.get(group, group).lower()} peers: "
@@ -254,9 +244,12 @@ def cmd_team(args: argparse.Namespace, client: FotMobClient) -> int:
 
 
 def cmd_leagues(_args: argparse.Namespace, _client: FotMobClient) -> int:
-    print(f"{'ID':>6}  {'League':<28} {'Country':<8} Tier")
-    for league in sorted(config.LEAGUES.values(), key=lambda l: (l.tier, l.country)):
-        print(f"{league.id:>6}  {league.name:<28} {league.country:<8} {league.tier}")
+    print(f"{'ID':>6}  {'League':<28} {'Country':<8} {'Strength':>8}  Tier")
+    for league in sorted(config.LEAGUES.values(), key=lambda lg: -lg.strength):
+        print(
+            f"{league.id:>6}  {league.name:<28} {league.country:<8} "
+            f"{league.strength:>8.1f}  {league.tier}"
+        )
     return 0
 
 
