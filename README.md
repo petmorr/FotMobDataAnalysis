@@ -2,11 +2,29 @@
 
 A Python toolkit for football player and team analysis built on live [FotMob](https://www.fotmob.com) data. Give it a player's name and it automatically builds the right comparison groups — players in the **same position**, in a similar **age range**, in the **same league** and in **similar-level leagues** — then produces percentile profiles, composite role scores, strengths/weaknesses, statistically similar players and charts.
 
+## Interactive app
+
+The easiest way to use the tool is the Streamlit app:
+
+```bash
+streamlit run app.py
+```
+
+The app walks through the intended workflow:
+
+1. **Find a player** — search by name in the sidebar.
+2. **Season analysis** — pick a season and get a colour-coded percentile profile, radar overview, role score and standout strengths/weaknesses vs same-position league peers.
+3. **Evaluate against...**
+   - **Another player** — search any player and pick *their* season. Each player is ranked against their own league season's positional peers, and a dumbbell chart highlights the key percentile differences (bold connectors + a written "Key differences" list).
+   - **A peer group** — same/similar position players, with an age slider defaulting to a sensible ±3-year range around the player's age, and a league scope of *same league*, *similar-level leagues (auto)* or a hand-picked list. Similar-level leagues are chosen by a strength score that blends **UEFA 5-year country coefficients** with **Opta Power Rankings** league averages. You get a percentile graph against that exact pool, above/below-group breakdowns and the closest statistical matches.
+
 ## Features
 
 - **Automated peer groups** — no manual data wrangling. The tool detects a player's position group, age and league from FotMob, then compares them against:
   - peers in the same league (same position, ±3 years by default, minutes floor), and
-  - peers across leagues of a similar strength tier (configurable spread).
+  - peers across leagues of similar strength (configurable breadth).
+- **League strength model** — every supported league carries a 0–100 strength score averaging its normalised UEFA 5-year country coefficient (top flights) and Opta Power Rankings league average (which also covers second tiers and non-UEFA leagues such as Brazil, Argentina, MLS and Liga MX). "Similar level" means within a strength window of the player's league, with the window controlled by a strict/broad/very-broad knob. Raw source values live in `fotmob_analytics/config.py` with retrieval dates for easy updating.
+- **Cross-season comparisons** — compare a player's current season with any player's past season; each is percentile-ranked within their own league season so the comparison measures relative dominance in context.
 - **Percentile profiles** with position-specific metric templates (8 role templates: GK, CB, FB, DM, CM, AM, W, ST), correctly flipping metrics where lower is better (fouls, big chances missed, goals conceded...).
 - **Composite role scores** (0–100) — weighted percentile averages per role.
 - **Similar-player search** — cosine similarity over z-scored role metrics across the whole multi-league pool.
@@ -44,8 +62,11 @@ fotmob-analytics player 737066 --json > haaland.json
 # statistically similar players
 fotmob-analytics similar "Declan Rice" --top 15
 
-# head-to-head vs a shared peer pool, with chart
+# head-to-head; each player ranked vs their own league season's peers
 fotmob-analytics compare "Erling Haaland" "Kylian Mbappe" --chart cmp.png
+
+# ... including across different seasons
+fotmob-analytics compare "Erling Haaland" "Harry Kane" --season-b 2024/2025
 
 # team report vs the rest of its league
 fotmob-analytics team "Arsenal"
@@ -88,21 +109,23 @@ pool = builder.multi_league_player_table([47, 87, 54])    # cross-league pool
 
 1. **Player context** comes from FotMob's player endpoint: age from birth date, position group from the main position, league from the player's main league.
 2. **League datasets** are assembled by pivoting FotMob's per-stat season leaderboards (xG, xA, shots, dribbles, tackles, recoveries, saves, ...) into one row per player, enriched with squad data (age, height, nationality, market value, precise position labels).
-3. **Peer filtering** keeps players in the same position group, within the age band, above the minutes floor. Cross-league pools use a configurable league-tier table (`fotmob_analytics/config.py`) — tier 1 is the European big five, tier 2 Eredivisie/Liga Portugal/Championship-level, and so on.
+3. **Peer filtering** keeps players in the same position group, within the age band, above the minutes floor. Cross-league pools pick leagues whose composite strength score (UEFA coefficient + Opta Power Rankings, normalised and averaged) is within a window of the player's league — see `similar_leagues()` in `fotmob_analytics/config.py`.
 4. **Percentiles** are rank-based (ties land mid-band) and flipped for lower-is-better metrics. **Role scores** are weighted percentile means using per-position weights. **Similarity** is cosine similarity over z-scored role metrics.
 
 ## Project layout
 
 | Module | Purpose |
 |---|---|
+| `app.py` | Streamlit app (search → analyse → compare) |
 | `fotmob_analytics/client.py` | FotMob API client (caching, rate limiting, search) |
-| `fotmob_analytics/config.py` | League tiers, position mappings, metric catalogs, role templates |
+| `fotmob_analytics/config.py` | League strength model (UEFA + Opta), position mappings, metric catalogs, role templates |
 | `fotmob_analytics/dataset.py` | Builds tidy player/team tables from the API |
 | `fotmob_analytics/peers.py` | Peer group specification and filtering |
 | `fotmob_analytics/metrics.py` | Percentiles, role scores, similarity (pure, offline-testable) |
 | `fotmob_analytics/analysis.py` | Player pipeline and scouting reports |
 | `fotmob_analytics/team.py` | Team pipeline and reports |
-| `fotmob_analytics/viz.py` | Radar and comparison charts |
+| `fotmob_analytics/charts.py` | Interactive Plotly charts (percentile bars, dumbbell comparison, radar) |
+| `fotmob_analytics/viz.py` | Matplotlib PNG charts for the CLI |
 | `fotmob_analytics/cli.py` | Command line interface |
 
 ## Tests
