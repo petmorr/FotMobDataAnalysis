@@ -9,21 +9,21 @@ import pandas as pd
 import streamlit as st
 
 from fotmob_analytics import config, metrics
-from fotmob_analytics.analysis import PlayerAnalyzer, PlayerContext
+from fotmob_analytics.analysis import PlayerAnalyzer, PlayerContext, SeasonProfile
 from fotmob_analytics.charts import (
     comparison_figure,
     key_differences,
     percentile_bar_figure,
     radar_figure,
 )
-from fotmob_analytics.client import FotMobClient, FotMobError
-from fotmob_analytics.dataset import DatasetBuilder
+from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
 from fotmob_analytics.peers import PeerSpec
 
 st.set_page_config(
     page_title="FotMob Analytics",
-    page_icon=":soccer:",
+    page_icon="⚽",
     layout="wide",
+    menu_items={"about": "Player analytics on FotMob data."},
 )
 
 CACHE_TTL = 6 * 3600
@@ -61,102 +61,89 @@ def default_season(league_id: int) -> str:
     return name
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner="Fetching league data from FotMob...")
-def league_players(league_id: int, season: str | None) -> pd.DataFrame:
-    return get_analyzer().builder.league_player_table(league_id, season=season)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def season_profile(
+    ctx: dict, season: str | None, min_minutes: int, template_group: str
+) -> SeasonProfile | None:
+    """Player row + same-position league peers + percentile profile."""
+    try:
+        return get_analyzer().season_profile(
+            PlayerContext(**ctx),
+            season=season,
+            min_minutes=min_minutes,
+            template=config.ROLE_TEMPLATES[template_group],
+        )
+    except FotMobError:
+        return None
 
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner="Fetching similar-level league data (first load takes a minute)...")
-def multi_league_players(league_ids: tuple[int, ...]) -> pd.DataFrame:
-    return get_analyzer().builder.multi_league_player_table(list(league_ids), season=None)
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def multi_league_players(league_ids: tuple[int, ...], _progress=None) -> pd.DataFrame:
+    return get_analyzer().builder.multi_league_player_table(
+        list(league_ids), season=None, progress=_progress
+    )
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# UI building blocks
 # ---------------------------------------------------------------------------
 
-def pct_chip(score: float | None) -> str:
-    if score is None:
-        return "—"
-    return f"{score:.0f} / 100"
+def score_text(score: float | None) -> str:
+    return "—" if score is None else f"{score:.0f} / 100"
 
 
-def find_row(pool: pd.DataFrame, ctx: dict) -> pd.Series | None:
-    match = pool[pool["player_id"] == ctx["player_id"]]
-    if match.empty:
-        return None
-    row = match.iloc[0].copy()
-    if ctx.get("age") is not None:
-        row["age"] = ctx["age"]
-    if ctx.get("position_group") is not None:
-        row["position_group"] = ctx["position_group"]
-    return row
-
-
-def profile_for(
-    ctx: dict, season: str | None, min_minutes: int
-) -> tuple[pd.Series, pd.DataFrame, pd.DataFrame, str] | None:
-    """Player row, same-position league peers, percentile profile and season
-    label — the base analysis unit. Returns None if the player has no data."""
-    pool = league_players(ctx["league_id"], season)
-    if pool.empty:
-        return None
-    row = find_row(pool, ctx)
-    if row is None:
-        return None
-    template = config.ROLE_TEMPLATES[ctx["position_group"]]
-    peers = pool[
-        (pool["position_group"] == ctx["position_group"])
-        & (pool["mins_played"].fillna(0) >= min_minutes)
-        & (pool["player_id"] != ctx["player_id"])
-    ]
-    profile = metrics.percentile_profile(row, peers, template.metrics)
-    return row, peers, profile, str(pool["season"].iloc[0])
-
-
-def player_picker(label: str, key: str) -> dict | None:
+def player_picker(label: str, key: str, container=None) -> dict | None:
     """Search box + result selector. Returns the chosen player's context."""
-    term = st.text_input(label, key=f"{key}_term", placeholder="e.g. Erling Haaland")
-    if not term or len(term) < 3:
+    box = container or st
+    term = box.text_input(label, key=f"{key}_term", placeholder="e.g. Erling Haaland")
+    if not term or len(term.strip()) < 3:
         return None
     try:
-        results = search_players(term)
+        results = search_players(term.strip())
     except FotMobError as exc:
-        st.error(f"Search failed: {exc}")
+        box.error(f"Search failed: {exc}")
         return None
     if not results:
-        st.warning(f"No players found for '{term}'.")
+        box.warning(f"No players found for '{term}'.")
         return None
     options = {f"{r['name']} — {r.get('team') or 'no club'}": r["id"] for r in results[:8]}
-    choice = st.selectbox("Select player", list(options), key=f"{key}_pick",
-                          label_visibility="collapsed")
+    choice = box.selectbox("Select player", list(options), key=f"{key}_pick",
+                           label_visibility="collapsed")
     player_id = options[choice]
     try:
         ctx = player_context_dict(player_id)
     except FotMobError as exc:
-        st.error(f"Could not load player: {exc}")
+        box.error(f"Could not load player: {exc}")
         return None
     if ctx.get("league_id") is None:
-        st.warning(f"{ctx['name']} has no league stats on FotMob.")
+        box.warning(f"{ctx['name']} has no league stats on FotMob.")
         return None
     if ctx.get("position_group") is None:
-        st.warning(f"Could not determine a position for {ctx['name']}.")
+        box.warning(f"Could not determine a position for {ctx['name']}.")
         return None
     return ctx
 
 
 def player_header(ctx: dict, season: str) -> None:
-    cols = st.columns(5)
-    cols[0].metric("Age", ctx["age"] if ctx["age"] else "—")
-    cols[1].metric("Position", config.GROUP_LABELS.get(ctx["position_group"], "—"))
-    cols[2].metric("Club", ctx["team"] or "—")
-    cols[3].metric("League", ctx["league_name"] or "—")
-    value = ctx.get("market_value")
-    cols[4].metric("Market value", f"€{value/1e6:.1f}m" if value else "—")
-    st.caption(f"Season analysed: **{season}**")
+    photo, info = st.columns([1, 8])
+    with photo:
+        st.image(player_image_url(ctx["player_id"]), width=110)
+    with info:
+        st.markdown(f"## {ctx['name']}")
+        chips = [
+            f"**{ctx['age']}** yrs" if ctx.get("age") else None,
+            config.GROUP_LABELS.get(ctx["position_group"]),
+            ctx.get("team"),
+            ctx.get("league_name"),
+            f"€{ctx['market_value'] / 1e6:.1f}m" if ctx.get("market_value") else None,
+            ctx.get("country"),
+        ]
+        st.markdown(" · ".join(c for c in chips if c))
+        st.caption(f"Season analysed: **{season}**")
 
 
-def season_select(ctx: dict, key: str) -> str | None:
+def season_select(ctx: dict, key: str, container=None) -> str | None:
+    box = container or st
     seasons = league_seasons(ctx["league_id"])
     if not seasons:
         return None
@@ -164,150 +151,102 @@ def season_select(ctx: dict, key: str) -> str | None:
         default = seasons.index(default_season(ctx["league_id"]))
     except (ValueError, FotMobError):
         default = 0
-    choice = st.selectbox(
+    return box.selectbox(
         f"Season for {ctx['name']}", seasons, index=default, key=key,
         help="Percentiles are computed against that season's league peers.",
     )
-    return choice
 
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-
-st.title("FotMob Analytics")
-st.caption(
-    "Search a player, analyse their season, then compare them with another "
-    "player or an automatically built peer group (same position, sensible age "
-    "range, same league or similar-level leagues ranked by UEFA coefficients "
-    "and Opta Power Rankings)."
-)
-
-with st.sidebar:
-    st.header("1 · Find a player")
-    ctx = player_picker("Player name", key="main")
-    st.divider()
-    min_minutes = st.slider(
-        "Minimum minutes for peers", 0, 2000, 450, step=90,
-        help="Players below this minutes total are excluded from peer pools.",
-    )
-
-if ctx is None:
-    st.info("Start by searching for a player in the sidebar.")
-    st.stop()
-
-template = config.ROLE_TEMPLATES[ctx["position_group"]]
-
-# ---- Section 2: the player's own analysis --------------------------------
-
-st.header(f"2 · {ctx['name']} — season analysis")
-season_main = season_select(ctx, key="main_season")
-
-base = profile_for(ctx, season_main, min_minutes)
-if base is None:
-    st.error(
-        f"{ctx['name']} has no stats for {season_main} in {ctx['league_name']} "
-        "(too few minutes, or the season hasn't started)."
-    )
-    st.stop()
-row_main, league_peers, league_profile, season_label = base
-player_header(ctx, season_label)
-
-score = metrics.role_score(league_profile, template.weights)
-strengths, weaknesses = metrics.strengths_and_weaknesses(league_profile)
-
-c1, c2 = st.columns([3, 2])
-with c1:
-    st.subheader("Percentile profile")
-    peer_label = (
-        f"{len(league_peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s "
-        f"in {ctx['league_name']}"
-    )
-    st.plotly_chart(percentile_bar_figure(league_profile, peer_label),
-                    use_container_width=True)
-with c2:
-    st.subheader("Overview")
-    st.metric("Role score vs league peers", pct_chip(score))
-    st.plotly_chart(radar_figure(league_profile, ctx["name"]),
-                    use_container_width=True)
+def strengths_weaknesses_lists(profile: pd.DataFrame, container=None) -> None:
+    box = container or st
+    strengths, weaknesses = metrics.strengths_and_weaknesses(profile)
     if not strengths.empty:
-        st.markdown("**Standout strengths**")
-        for _, r in strengths.head(4).iterrows():
-            st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
+        box.markdown("**Standout strengths**")
+        for _, r in strengths.head(5).iterrows():
+            box.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
     if not weaknesses.empty:
-        st.markdown("**Areas to improve**")
-        for _, r in weaknesses.head(4).iterrows():
-            st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
+        box.markdown("**Areas to improve**")
+        for _, r in weaknesses.head(5).iterrows():
+            box.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
+    if strengths.empty and weaknesses.empty:
+        box.caption("No metrics stand far above or below the peer group.")
 
-# ---- Section 3: evaluation -------------------------------------------------
 
-st.header("3 · Evaluate against...")
-mode = st.radio(
-    "Comparison mode",
-    ["Another player", "A peer group"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
+def profile_download(profile: pd.DataFrame, filename: str, label: str) -> None:
+    st.download_button(
+        label, profile.to_csv(index=False).encode(), file_name=filename,
+        mime="text/csv", key=f"dl_{filename}",
+    )
 
-if mode == "Another player":
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+
+def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
     st.markdown(
         "Pick any player and season. Each player is ranked against **their own "
         "league season's** positional peers, so the chart compares how dominant "
         "each was in their context."
     )
     col_pick, col_season = st.columns([2, 1])
-    with col_pick:
-        other = player_picker("Second player", key="other")
-    if other is not None:
-        with col_season:
-            season_other = season_select(other, key="other_season")
-        if other["position_group"] != ctx["position_group"]:
-            st.info(
-                f"{other['name']} is a {config.GROUP_LABELS[other['position_group']].lower()}, "
-                f"{ctx['name']} a {config.GROUP_LABELS[ctx['position_group']].lower()} — "
-                f"metrics use the {config.GROUP_LABELS[ctx['position_group']].lower()} template."
-            )
-        other_base = profile_for(other, season_other, min_minutes)
-        if other_base is None:
-            st.error(f"{other['name']} has no stats for that season.")
-        else:
-            row_other, peers_other, _, season_other_label = other_base
-            # Rebuild the second profile on the FIRST player's template so
-            # both charts show the same metrics.
-            profile_other = metrics.percentile_profile(
-                row_other, peers_other, template.metrics
-            )
-            score_other = metrics.role_score(profile_other, template.weights)
+    other = player_picker("Second player", key="other", container=col_pick)
+    if other is None:
+        return
+    season_other = season_select(other, key="other_season", container=col_season)
+    if other["position_group"] != ctx["position_group"]:
+        st.info(
+            f"{other['name']} is a {config.GROUP_LABELS[other['position_group']].lower()}, "
+            f"{ctx['name']} a {config.GROUP_LABELS[ctx['position_group']].lower()} — "
+            f"metrics use the {config.GROUP_LABELS[ctx['position_group']].lower()} template."
+        )
+    with st.spinner(f"Analysing {other['name']}..."):
+        other_sp = season_profile(
+            other, season_other, min_minutes, ctx["position_group"]
+        )
+    if other_sp is None:
+        st.error(f"{other['name']} has no stats for that season.")
+        return
 
-            m1, m2 = st.columns(2)
-            m1.metric(f"{ctx['name']} · {season_label}", pct_chip(score))
-            m2.metric(f"{other['name']} · {season_other_label}", pct_chip(score_other))
+    m1, m2 = st.columns(2)
+    m1.metric(f"{ctx['name']} · {base.season}", score_text(base.role_score))
+    m2.metric(f"{other['name']} · {other_sp.season}", score_text(other_sp.role_score))
 
-            st.plotly_chart(
-                comparison_figure(
-                    league_profile, profile_other,
-                    f"{ctx['name']} ({season_label})",
-                    f"{other['name']} ({season_other_label})",
-                ),
-                use_container_width=True,
+    st.plotly_chart(
+        comparison_figure(
+            base.profile, other_sp.profile,
+            f"{ctx['name']} ({base.season})",
+            f"{other['name']} ({other_sp.season})",
+        ),
+        width="stretch",
+    )
+    diffs = key_differences(base.profile, other_sp.profile, ctx["name"], other["name"])
+    if not diffs.empty:
+        st.subheader("Key differences")
+        for _, d in diffs.iterrows():
+            st.markdown(
+                f"- **{d['title']}** — {d['leader']} leads by "
+                f"{d['gap']:.0f} percentile points ({d['detail']})"
             )
-            diffs = key_differences(
-                league_profile, profile_other, ctx["name"], other["name"]
-            )
-            if not diffs.empty:
-                st.subheader("Key differences")
-                for _, d in diffs.iterrows():
-                    st.markdown(
-                        f"- **{d['title']}** — {d['leader']} leads by "
-                        f"{d['gap']:.0f} percentile points ({d['detail']})"
-                    )
-            else:
-                st.caption("No major percentile gaps — very similar profiles.")
+    else:
+        st.caption("No major percentile gaps — very similar profiles.")
 
-else:  # peer group
+    merged = (
+        base.profile.merge(
+            other_sp.profile, on=["metric", "title"], suffixes=("_a", "_b")
+        )
+    )
+    profile_download(
+        merged, f"compare_{ctx['player_id']}_{other['player_id']}.csv",
+        "Download comparison (CSV)",
+    )
+
+
+def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int) -> None:
     st.markdown(
-        f"Compare {ctx['name']} against {config.GROUP_LABELS[ctx['position_group']].lower()}s "
-        "filtered by age and league level."
+        f"Compare {ctx['name']} against "
+        f"{config.GROUP_LABELS[ctx['position_group']].lower()}s filtered by age "
+        "and league level."
     )
     colA, colB, colC = st.columns([1.3, 1.2, 1])
     with colA:
@@ -355,75 +294,177 @@ else:  # peer group
         names = [config.LEAGUES[i].name for i in league_ids if i in config.LEAGUES]
         st.caption("Leagues in pool: " + ", ".join(names))
 
+    run_key = (ctx["player_id"], tuple(league_ids), lo, hi, min_minutes)
     if st.button("Build comparison", type="primary"):
-        pool = multi_league_players(tuple(league_ids))
-        if pool.empty:
-            st.error("No data found for the selected leagues.")
-            st.stop()
-        spec = PeerSpec(
-            position_group=ctx["position_group"],
-            age=(lo + hi) // 2 if lo is not None else None,
-            age_band=(hi - lo) // 2 if lo is not None else 0,
-            min_minutes=min_minutes,
-            exclude_player_ids={ctx["player_id"]},
+        st.session_state["peer_run"] = run_key
+    if st.session_state.get("peer_run") != run_key:
+        st.caption("Set the filters and press **Build comparison**.")
+        return
+
+    progress = st.progress(0.0, text="Loading league data...")
+
+    def on_progress(label: str, fraction: float) -> None:
+        progress.progress(min(fraction, 1.0), text=f"Loading {label}...")
+
+    pool = multi_league_players(tuple(league_ids), _progress=on_progress)
+    progress.empty()
+    if pool.empty:
+        st.error("No data found for the selected leagues.")
+        return
+
+    spec = PeerSpec(
+        position_group=ctx["position_group"],
+        min_minutes=min_minutes,
+        exclude_player_ids={ctx["player_id"]},
+    )
+    peers = spec.apply(pool)
+    if lo is not None:
+        ages = pd.to_numeric(peers["age"], errors="coerce")
+        peers = peers[ages.between(lo, hi)]
+    if len(peers) < 5:
+        st.warning(
+            f"Only {len(peers)} peers match — widen the age range, lower the "
+            "minutes floor or add leagues for a more reliable comparison."
         )
-        peers = spec.apply(pool)
-        if lo is not None:  # apply the exact slider range, not just the band
-            ages = pd.to_numeric(peers["age"], errors="coerce")
-            peers = peers[ages.between(lo, hi)]
-        if len(peers) < 5:
-            st.warning(
-                f"Only {len(peers)} peers match — widen the age range, lower the "
-                "minutes floor or add leagues for a more reliable comparison."
-            )
-        if peers.empty:
-            st.stop()
+    if peers.empty:
+        return
 
-        group_profile = metrics.percentile_profile(row_main, peers, template.metrics)
-        group_score = metrics.role_score(group_profile, template.weights)
+    group_profile = metrics.percentile_profile(base.row, peers, template.metrics)
+    group_score = metrics.role_score(group_profile, template.weights)
 
-        desc_bits = [f"{len(peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s"]
-        if lo is not None:
-            desc_bits.append(f"aged {lo}-{hi}")
-        desc_bits.append(f"{len(league_ids)} league(s)")
-        desc = ", ".join(desc_bits)
+    desc_bits = [f"{len(peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s"]
+    if lo is not None:
+        desc_bits.append(f"aged {lo}-{hi}")
+    desc_bits.append(f"{len(league_ids)} league(s)")
+    desc = ", ".join(desc_bits)
 
-        st.metric("Role score vs this peer group", pct_chip(group_score))
-        st.plotly_chart(percentile_bar_figure(group_profile, desc),
-                        use_container_width=True)
+    st.metric("Role score vs this peer group", score_text(group_score))
+    st.plotly_chart(percentile_bar_figure(group_profile, desc), width="stretch")
 
-        g_str, g_weak = metrics.strengths_and_weaknesses(group_profile)
-        col_s, col_w = st.columns(2)
-        with col_s:
-            st.markdown("**Above the group (top 20%)**")
-            if g_str.empty:
-                st.caption("none")
-            for _, r in g_str.iterrows():
-                st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
-        with col_w:
-            st.markdown("**Below the group (bottom 25%)**")
-            if g_weak.empty:
-                st.caption("none")
-            for _, r in g_weak.iterrows():
-                st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
+    col_s, col_w = st.columns(2)
+    g_str, g_weak = metrics.strengths_and_weaknesses(group_profile)
+    with col_s:
+        st.markdown("**Above the group (top 20%)**")
+        if g_str.empty:
+            st.caption("none")
+        for _, r in g_str.iterrows():
+            st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
+    with col_w:
+        st.markdown("**Below the group (bottom 25%)**")
+        if g_weak.empty:
+            st.caption("none")
+        for _, r in g_weak.iterrows():
+            st.markdown(f"- {r['title']}: {r['value']:g} ({r['percentile']:.0f}th pct)")
 
-        similar = metrics.similar_players(row_main, peers, template.metrics, top_n=8)
-        if not similar.empty:
-            st.subheader("Closest statistical matches in this group")
-            show = similar.rename(
-                columns={
-                    "name": "Player", "age": "Age", "team": "Club",
-                    "league": "League", "mins_played": "Minutes",
-                    "rating": "Rating", "similarity": "Similarity",
-                }
-            )
-            keep = [c for c in ("Player", "Age", "Club", "League", "Minutes",
-                                "Rating", "Similarity") if c in show.columns]
-            st.dataframe(show[keep], use_container_width=True, hide_index=True)
+    similar = metrics.similar_players(base.row, peers, template.metrics, top_n=8)
+    if not similar.empty:
+        st.subheader("Closest statistical matches in this group")
+        show = similar.rename(
+            columns={
+                "name": "Player", "age": "Age", "team": "Club",
+                "league": "League", "mins_played": "Minutes",
+                "rating": "Rating", "similarity": "Similarity",
+            }
+        )
+        keep = [c for c in ("Player", "Age", "Club", "League", "Minutes",
+                            "Rating", "Similarity") if c in show.columns]
+        st.dataframe(show[keep], width="stretch", hide_index=True)
+
+    profile_download(
+        group_profile, f"peer_group_{ctx['player_id']}.csv",
+        "Download peer-group profile (CSV)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
+st.title("⚽ FotMob Analytics")
+st.caption(
+    "Search a player, analyse their season, then compare them with another "
+    "player or an automatically built peer group — same position, sensible age "
+    "range, same league or similar-level leagues ranked by UEFA coefficients "
+    "and Opta Power Rankings."
+)
+
+with st.sidebar:
+    st.header("1 · Find a player")
+    ctx = player_picker("Player name", key="main")
+    st.divider()
+    min_minutes = st.slider(
+        "Minimum minutes for peers", 0, 2000, 450, step=90,
+        help="Players below this minutes total are excluded from peer pools.",
+    )
+    st.caption(
+        "Data: FotMob, cached 6 hours. First load of a league takes a few "
+        "seconds; similar-level pools take longer on first use."
+    )
+
+if ctx is None:
+    st.info("Start by searching for a player in the sidebar.")
+    st.stop()
+
+template = config.ROLE_TEMPLATES[ctx["position_group"]]
+
+# ---- Section 2: the player's own analysis ---------------------------------
+
+st.header("2 · Season analysis")
+season_main = season_select(ctx, key="main_season")
+
+with st.spinner(f"Analysing {ctx['name']}..."):
+    base = season_profile(ctx, season_main, min_minutes, ctx["position_group"])
+if base is None:
+    st.error(
+        f"{ctx['name']} has no stats for {season_main} in {ctx['league_name']} "
+        "(too few minutes, or the season hasn't started)."
+    )
+    st.stop()
+
+player_header(ctx, base.season)
+
+c1, c2 = st.columns([3, 2])
+with c1:
+    st.subheader("Percentile profile")
+    peer_label = (
+        f"{len(base.peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s "
+        f"in {ctx['league_name']}"
+    )
+    st.plotly_chart(percentile_bar_figure(base.profile, peer_label), width="stretch")
+    profile_download(
+        base.profile, f"profile_{ctx['player_id']}.csv", "Download profile (CSV)"
+    )
+with c2:
+    st.subheader("Overview")
+    st.metric("Role score vs league peers", score_text(base.role_score))
+    st.plotly_chart(radar_figure(base.profile, ctx["name"]), width="stretch")
+    strengths_weaknesses_lists(base.profile)
+
+# ---- Section 3: evaluation --------------------------------------------------
+
+st.header("3 · Evaluate against...")
+tab_player, tab_group = st.tabs(["🆚 Another player", "👥 A peer group"])
+with tab_player:
+    render_vs_player(ctx, base, min_minutes)
+with tab_group:
+    render_peer_group(ctx, base, template, min_minutes)
 
 st.divider()
-st.caption(
-    "Data: FotMob (cached 6h). League strength: UEFA 5-year country "
-    "coefficients + Opta Power Rankings averages. Ages come from current "
-    "squads, so historical seasons use players' current ages."
-)
+with st.expander("Methodology & data sources"):
+    st.markdown(
+        """
+- **Data** comes from FotMob's public API (season deep stats, squads, player
+  pages) and is cached locally for 6 hours (30 days for finished seasons).
+- **Percentiles** are rank-based; ties land mid-band. Metrics where lower is
+  better (fouls, big chances missed, goals conceded...) are flipped so higher
+  percentile always means better.
+- **Role scores** (0-100) are weighted means of percentiles using
+  position-specific weights (see `fotmob_analytics/config.py`).
+- **League strength** blends the normalised UEFA 5-year country coefficient
+  with Opta Power Rankings league averages; "similar level" means within a
+  strength window of the player's league.
+- **Similarity** is cosine similarity over z-scored role metrics.
+- **Ages** come from current squad data, so historical seasons use players'
+  current ages.
+"""
+    )
