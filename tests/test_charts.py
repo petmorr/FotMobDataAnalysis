@@ -111,6 +111,42 @@ def test_shot_map_requires_shots():
         charts.shot_map_figure(empty, "A", "2025/2026")
 
 
+class TestPlayerCard:
+    def test_card_structure(self, profile_a):
+        personal = {
+            "name": "A. Player", "age": 24, "position": "Winger",
+            "team": "Club", "league": "League", "country": "Countryland",
+            "height": 180, "market_value": 5e7, "minutes": 2100, "rating": 7.5,
+        }
+        fig = charts.player_card_figure(
+            personal, profile_a, peer_label="63 wingers",
+            role_name="Touchline Winger", role_confidence="clear",
+            role_score=82.0, photo_url="https://example.com/p.png",
+        )
+        texts = [a.text for a in fig.layout.annotations]
+        assert any("A. Player" in t for t in texts)
+        assert any("Touchline Winger" in t for t in texts)
+        assert any("Market value" in t for t in texts)
+        assert any("KEY ATTRIBUTES" in t for t in texts)
+        assert any("63 wingers" in t for t in texts)
+        assert len(fig.layout.images) == 1  # photo
+        # bar shapes exist (track + fill per metric, plus frame and badge)
+        assert len(fig.layout.shapes) >= 2 * len(profile_a) + 1
+
+    def test_card_without_optionals(self, profile_a):
+        fig = charts.player_card_figure(
+            {"name": "X"}, profile_a, peer_label="peers",
+        )
+        assert len(fig.layout.images) == 0
+        texts = [a.text for a in fig.layout.annotations]
+        assert any("<b>X</b>" in t for t in texts)
+
+    def test_card_requires_percentiles(self, profile_a):
+        empty = profile_a.assign(percentile=None)
+        with pytest.raises(ValueError):
+            charts.player_card_figure({"name": "X"}, empty, peer_label="p")
+
+
 def test_short_title():
     assert charts._short_title("Successful dribbles per 90") == "Dribbles/90"
     assert charts._short_title("Goals per 90") == "Goals/90"

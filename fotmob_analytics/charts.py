@@ -560,6 +560,186 @@ def comparison_radar_figure(
     return fig
 
 
+def player_card_figure(
+    personal: dict,
+    profile: pd.DataFrame,
+    peer_label: str,
+    role_name: str | None = None,
+    role_confidence: str | None = None,
+    role_score: float | None = None,
+    photo_url: str | None = None,
+    top_n: int = 5,
+    weak_n: int = 2,
+) -> go.Figure:
+    """Single shareable player card: personal data, role profile and the key
+    attributes (best percentiles, plus notable weaknesses) vs a peer group.
+
+    ``personal`` keys used (all optional except name): name, age, position,
+    team, league, country, height, market_value, minutes, rating.
+    """
+    data = _clean(profile)
+    if data.empty:
+        raise ValueError("profile has no percentiles to plot")
+    best = data.sort_values("percentile", ascending=False).head(top_n)
+    weak = data.sort_values("percentile").head(weak_n)
+    weak = weak[weak["percentile"] < 40.0]
+    weak = weak[~weak["metric"].isin(best["metric"])]
+    rows = pd.concat([best, weak]).iloc[::-1]
+
+    fig = go.Figure()
+
+    # ---- right side: key attribute bars (x domain 0.42-1.0) ----
+    bar_x0, bar_x1 = 0.46, 0.99
+    n = len(rows)
+    y_top, y_bottom = 0.66, 0.06
+    slot = (y_top - y_bottom) / max(n, 1)
+    for i, (_, row) in enumerate(rows.iterrows()):
+        y = y_bottom + slot * (i + 0.5)
+        pct = float(row["percentile"])
+        color = _pct_color(pct)
+        # track
+        fig.add_shape(
+            type="rect", xref="paper", yref="paper",
+            x0=bar_x0, x1=bar_x1, y0=y - 0.022, y1=y + 0.022,
+            fillcolor="#eef0f5", line_width=0, layer="below",
+        )
+        # fill
+        fig.add_shape(
+            type="rect", xref="paper", yref="paper",
+            x0=bar_x0, x1=bar_x0 + (bar_x1 - bar_x0) * pct / 100.0,
+            y0=y - 0.022, y1=y + 0.022,
+            fillcolor=color, line_width=0, layer="below",
+        )
+        fig.add_annotation(
+            xref="paper", yref="paper", x=bar_x0, y=y + 0.055,
+            text=f"{row['title']}  ·  <b>{round(float(row['value']), 2):g}</b>",
+            showarrow=False, font=dict(size=12, color="#334155"),
+            xanchor="left", yanchor="middle",
+        )
+        fig.add_annotation(
+            xref="paper", yref="paper", x=bar_x1, y=y,
+            text=f"<b>{pct:.0f}</b>", showarrow=False,
+            font=dict(size=12, color="#0f172a"), xanchor="left", yanchor="middle",
+        )
+    fig.add_annotation(
+        xref="paper", yref="paper", x=bar_x0, y=y_top + 0.13,
+        text="<b>KEY ATTRIBUTES</b>  <span style='color:#94a3b8'>(percentile)</span>",
+        showarrow=False, font=dict(size=12, color="#0f172a"),
+        xanchor="left",
+    )
+
+    # ---- left side: identity block ----
+    left_x = 0.02 if photo_url is None else 0.17
+    name = personal.get("name", "")
+    fig.add_annotation(
+        xref="paper", yref="paper", x=left_x, y=0.93,
+        text=f"<b>{name}</b>", showarrow=False,
+        font=dict(size=20, color="#0f172a"), xanchor="left",
+    )
+    lines: list[str] = []
+    if personal.get("age"):
+        lines.append(f"{personal['age']} yrs")
+    if personal.get("position"):
+        lines.append(str(personal["position"]))
+    line1 = " · ".join(lines)
+    facts = [
+        line1 or None,
+        " · ".join(
+            str(x) for x in (personal.get("team"), personal.get("league")) if x
+        ) or None,
+        " · ".join(
+            str(x)
+            for x in (
+                personal.get("country"),
+                f"{personal['height']} cm" if personal.get("height") else None,
+            )
+            if x
+        ) or None,
+        f"Market value €{personal['market_value'] / 1e6:.1f}m"
+        if personal.get("market_value") else None,
+        " · ".join(
+            str(x)
+            for x in (
+                f"{int(personal['minutes'])} mins" if personal.get("minutes") else None,
+                f"rating {personal['rating']:.2f}" if personal.get("rating") else None,
+            )
+            if x
+        ) or None,
+    ]
+    y = 0.84
+    for fact in facts:
+        if not fact:
+            continue
+        fig.add_annotation(
+            xref="paper", yref="paper", x=left_x, y=y, text=fact,
+            showarrow=False, font=dict(size=12.5, color="#475569"),
+            xanchor="left",
+        )
+        y -= 0.075
+
+    # role banner
+    if role_name:
+        qualifier = {"clear": "", "leaning": " (leaning)", "mixed": " (mixed profile)"}
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.02, y=y - 0.05,
+            text=f"🎯 <b>{role_name}</b>{qualifier.get(role_confidence or '', '')}",
+            showarrow=False, font=dict(size=13, color="#0f172a"), xanchor="left",
+        )
+        y -= 0.13
+
+    # role score badge
+    if role_score is not None:
+        badge_color = _pct_color(role_score)
+        fig.add_shape(
+            type="circle", xref="paper", yref="paper",
+            x0=0.02, x1=0.135, y0=y - 0.30, y1=y - 0.02,
+            fillcolor=badge_color, line=dict(color="white", width=2),
+        )
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.0775, y=y - 0.13,
+            text=f"<b>{role_score:.0f}</b>",
+            showarrow=False,
+            font=dict(size=22, color=_text_color_for(badge_color)),
+        )
+        fig.add_annotation(
+            xref="paper", yref="paper", x=0.155, y=y - 0.13,
+            text="Role score<br>vs peer group", showarrow=False,
+            font=dict(size=11, color="#475569"), xanchor="left",
+        )
+
+    # footer: peer group context
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.02, y=-0.02,
+        text=f"Peer group: {peer_label}",
+        showarrow=False, font=dict(size=11, color="#94a3b8"), xanchor="left",
+    )
+
+    if photo_url:
+        fig.add_layout_image(
+            dict(source=photo_url, xref="paper", yref="paper",
+                 x=0.0, y=0.98, sizex=0.13, sizey=0.30,
+                 xanchor="left", yanchor="top", layer="above")
+        )
+
+    # card frame
+    fig.add_shape(
+        type="rect", xref="paper", yref="paper", x0=-0.01, x1=1.005,
+        y0=-0.06, y1=1.02, line=dict(color="#e2e8f0", width=1.5),
+        fillcolor="rgba(0,0,0,0)", layer="below",
+    )
+    fig.update_layout(
+        xaxis=dict(visible=False, range=[0, 1]),
+        yaxis=dict(visible=False, range=[0, 1]),
+        font=FONT,
+        plot_bgcolor=PAPER,
+        paper_bgcolor=PAPER,
+        margin=dict(l=20, r=45, t=20, b=25),
+        height=380,
+        showlegend=False,
+    )
+    return fig
+
+
 def key_differences(
     profile_a: pd.DataFrame,
     profile_b: pd.DataFrame,
