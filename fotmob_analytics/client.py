@@ -206,6 +206,36 @@ class FotMobClient:
             )
         return data
 
+    def player_season_stats(self, player_id: int, entry_id: str) -> dict:
+        """Detailed per-player season stats (shooting, passing, possession,
+        defending, goalkeeping groups with FotMob percentile ranks).
+
+        ``entry_id`` comes from ``playerData.statSeasons`` (e.g. ``"0-0"``);
+        resolve it with :meth:`resolve_stat_entry`.
+        """
+        data = self._api("playerStats", playerId=player_id, seasonId=entry_id)
+        if not isinstance(data, dict) or "statsSection" not in data:
+            raise FotMobError(
+                f"No detailed stats for player={player_id} entry={entry_id}"
+            )
+        return data
+
+    @staticmethod
+    def resolve_stat_entry(
+        player_data: dict, league_id: int, season_name: str | None = None
+    ) -> tuple[str, str] | None:
+        """Find the ``(entry_id, season_name)`` for a league season in a
+        ``playerData`` payload. ``season_name=None`` picks the most recent."""
+        for season in player_data.get("statSeasons") or []:
+            if season_name and season.get("seasonName") != season_name:
+                continue
+            for tournament in season.get("tournaments") or []:
+                if tournament.get("tournamentId") == league_id:
+                    entry = tournament.get("entryId")
+                    if entry:
+                        return entry, season.get("seasonName", "")
+        return None
+
     def search(self, term: str) -> dict:
         url = f"{SEARCH_URL}?{urlencode({'term': term, 'lang': 'en'})}"
         return self._get_json(url)
