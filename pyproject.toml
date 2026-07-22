@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fotmob-analytics"
+version = "0.1.0"
+description = "Player and team analytics on FotMob data: percentile profiles, peer-group comparisons, similarity search and scouting reports."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+fotmob-analytics = "fotmob_analytics.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fotmob_analytics*"]
+
+[tool.pytest.ini_options]
+markers = ["live: tests that hit the real FotMob API (deselect with '-m \"not live\"')"]
