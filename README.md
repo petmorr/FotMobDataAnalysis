@@ -13,10 +13,10 @@ streamlit run app.py
 The app walks through the intended workflow:
 
 1. **Find a player** — search by name in the sidebar.
-2. **Season analysis** — pick a season (defaults to the latest with data) and get a player card with photo, a colour-coded percentile profile, radar overview, role score and standout strengths/weaknesses vs same-position league peers.
-3. **Player profile** — a role-archetype breakdown (what *kind* of winger/striker/midfielder they are) plus ~45 in-depth season stats (xGOT, non-penalty xG, duels, aerials, touches, crosses, sweeper actions...) with FotMob's percentile ranks against same-position league peers.
+2. **Season analysis** — pick a season (defaults to the latest with data) and get a player card with photo and KPI cards, a percentile profile grouped and coloured by phase of play (FBref-style), a pizza chart overview, role score and standout strengths/weaknesses vs same-position league peers. Small samples (<900 minutes) are flagged.
+3. **Player profile** — a role-archetype breakdown (what *kind* of winger/striker/midfielder they are), ~45 in-depth season stats (xGOT, non-penalty xG, duels, aerials, touches, crosses, sweeper actions...) with FotMob's percentile ranks against same-position league peers, and an Understat-style xG shot map on a drawn pitch (marker size = xG, colour = outcome).
 4. **Evaluate against...**
-   - **Another player** — search any player and pick *their* season. Each player is ranked against their own league season's positional peers, and a dumbbell chart highlights the key percentile differences (bold connectors + a written "Key differences" list).
+   - **Another player** — search any player and pick *their* season. Each player is ranked against their own league season's positional peers; view the comparison as a dumbbell chart with key percentile gaps highlighted or as a StatsBomb-style overlay radar, plus a written "Key differences" list and a style note when the players profile as different role types.
    - **A peer group** — same/similar position players, with an age slider defaulting to a sensible ±3-year range around the player's age, and a league scope of *same league*, *similar-level leagues (auto)* or a hand-picked list. Similar-level leagues are chosen by a strength score that blends **UEFA 5-year country coefficients** with **Opta Power Rankings** league averages. You get a percentile graph against that exact pool, above/below-group breakdowns and the closest statistical matches.
 
 ## Features
@@ -114,6 +114,7 @@ pool = builder.multi_league_player_table([47, 87, 54])    # cross-league pool
 2. **League datasets** are assembled by pivoting FotMob's per-stat season leaderboards (xG, xA, shots, dribbles, tackles, recoveries, saves, ...) into one row per player, enriched with squad data (age, height, nationality, market value, precise position labels).
 3. **Peer filtering** keeps players in the same position group, within the age band, above the minutes floor. Cross-league pools pick leagues whose composite strength score (UEFA coefficient + Opta Power Rankings, normalised and averaged) is within a window of the player's league — see `similar_leagues()` in `fotmob_analytics/config.py`.
 4. **Percentiles** are rank-based (ties land mid-band) and flipped for lower-is-better metrics. **Role scores** are weighted percentile means using per-position weights. **Similarity** is cosine similarity over z-scored role metrics.
+5. **Presentation** follows the conventions of the leading analytics tools: FBref/StatsBomb-style pizza charts with phase-of-play colour groups, StatsBomb-style overlay radars for head-to-heads, Understat-style xG shot maps, and percentile bars with explicit peer-group labels on every chart.
 
 ## Project layout
 
