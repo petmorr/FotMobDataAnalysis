@@ -10,6 +10,7 @@ def profile_a():
         {
             "metric": ["goals_per_90", "expected_goals_per_90", "rating"],
             "title": ["Goals per 90", "xG per 90", "FotMob rating"],
+            "category": ["Attacking", "Attacking", "Overall"],
             "value": [0.8, 0.7, 7.4],
             "peer_median": [0.4, 0.35, 6.9],
             "percentile": [92.0, 88.0, 75.0],
@@ -66,6 +67,54 @@ def test_pct_color_scale():
     assert charts._pct_color(0) == "rgb(198, 40, 40)"
     assert charts._pct_color(100) == "rgb(27, 138, 90)"
     assert charts._pct_color(None) == "#cccccc"
+
+
+def test_percentile_bar_category_coloring(profile_a):
+    fig = charts.percentile_bar_figure(profile_a, "peers", color_by="category")
+    # first trace is the bars, extra traces build the category legend
+    assert len(fig.data) == 1 + 2  # Attacking + Overall legend entries
+    from fotmob_analytics.config import CATEGORY_COLORS
+    # bars are plotted bottom-up, so the last colour is the first metric
+    assert fig.data[0].marker.color[-1] == CATEGORY_COLORS["Attacking"]
+    assert fig.data[0].marker.color[0] == CATEGORY_COLORS["Overall"]
+
+
+def test_pizza_figure(profile_a):
+    fig = charts.pizza_figure(profile_a, "A", "peers")
+    kinds = [trace.type for trace in fig.data]
+    assert kinds.count("barpolar") >= 2  # background + wedges (+ legend)
+    assert "scatterpolar" in kinds  # value labels
+
+
+def test_comparison_radar(profile_a, profile_b):
+    fig = charts.comparison_radar_figure(profile_a, profile_b, "A", "B")
+    assert len(fig.data) == 2
+    assert len(fig.data[0].r) == 4  # closed loop
+
+
+def test_shot_map():
+    shots = pd.DataFrame(
+        {
+            "x": [95.0, 88.0, 100.0],
+            "y": [34.0, 40.0, 30.0],
+            "xg": [0.4, 0.05, 0.8],
+            "event": ["Goal", "Miss", "AttemptSaved"],
+            "shot_type": ["RightFoot", "Header", "LeftFoot"],
+            "situation": ["OpenPlay", "FromCorner", "OpenPlay"],
+            "minute": [12, 45, 88],
+            "on_target": [True, False, True],
+        }
+    )
+    fig = charts.shot_map_figure(shots, "A", "2025/2026")
+    assert len(fig.data) == 3  # goal, saved, miss traces
+    assert fig.layout.shapes  # pitch drawn
+
+
+def test_shot_map_requires_shots():
+    empty = pd.DataFrame(columns=["x", "y", "xg", "event", "shot_type",
+                                  "situation", "minute", "on_target"])
+    with pytest.raises(ValueError):
+        charts.shot_map_figure(empty, "A", "2025/2026")
 
 
 def test_short_title():

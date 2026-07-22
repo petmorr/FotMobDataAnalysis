@@ -6,8 +6,11 @@ remains for CLI PNG export.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+
+from fotmob_analytics.config import CATEGORY_COLORS
 
 FONT = dict(family="Inter, Segoe UI, sans-serif", size=13)
 PAPER = "#ffffff"
@@ -39,10 +42,17 @@ def _clean(profile: pd.DataFrame) -> pd.DataFrame:
     return profile.dropna(subset=["percentile"]).reset_index(drop=True)
 
 
-def percentile_bar_figure(profile: pd.DataFrame, peer_label: str) -> go.Figure:
-    """Horizontal percentile bars, one per metric, colour-coded and annotated
-    with the raw value and the peer median."""
-    data = _clean(profile).iloc[::-1]  # best-known ordering, top metric first
+def percentile_bar_figure(
+    profile: pd.DataFrame, peer_label: str, color_by: str = "percentile"
+) -> go.Figure:
+    """Horizontal percentile bars, one per metric, annotated with the raw
+    value and peer median.
+
+    ``color_by="percentile"`` uses a red-amber-green performance scale;
+    ``color_by="category"`` colours by phase of play (FBref-style) with a
+    legend, when the profile has a ``category`` column.
+    """
+    data = _clean(profile).iloc[::-1]  # profile order, top metric first
     labels = data["title"]
     pct = data["percentile"].astype(float)
 
@@ -52,18 +62,39 @@ def percentile_bar_figure(profile: pd.DataFrame, peer_label: str) -> go.Figure:
         f"<br>Percentile: {row['percentile']:.0f}"
         for _, row in data.iterrows()
     ]
-    fig = go.Figure(
-        go.Bar(
-            x=pct,
-            y=labels,
-            orientation="h",
+    use_category = color_by == "category" and "category" in data.columns
+    fig = go.Figure()
+    if use_category:
+        seen: set[str] = set()
+        colors, legend_traces = [], []
+        for cat in data["category"]:
+            colors.append(CATEGORY_COLORS.get(cat, "#9ca3af"))
+            if cat not in seen:
+                seen.add(cat)
+                legend_traces.append(cat)
+        fig.add_bar(
+            x=pct, y=labels, orientation="h",
+            marker_color=colors,
+            text=[f" {p:.0f}" for p in pct],
+            textposition="outside",
+            hovertext=hover, hoverinfo="text",
+            showlegend=False,
+        )
+        # invisible traces to build a category legend
+        for cat in reversed(legend_traces):
+            fig.add_bar(
+                x=[None], y=[None], name=cat,
+                marker_color=CATEGORY_COLORS.get(cat, "#9ca3af"),
+            )
+    else:
+        fig.add_bar(
+            x=pct, y=labels, orientation="h",
             marker_color=[_pct_color(p) for p in pct],
             text=[f" {p:.0f}" for p in pct],
             textposition="outside",
-            hovertext=hover,
-            hoverinfo="text",
+            hovertext=hover, hoverinfo="text",
+            showlegend=False,
         )
-    )
     fig.add_vline(x=50, line_dash="dot", line_color="#9ca3af",
                   annotation_text="peer median", annotation_font_size=11)
     fig.update_layout(
@@ -75,9 +106,104 @@ def percentile_bar_figure(profile: pd.DataFrame, peer_label: str) -> go.Figure:
         paper_bgcolor=PAPER,
         margin=dict(l=10, r=30, t=10, b=40),
         height=max(340, 34 * len(data) + 90),
-        showlegend=False,
+        legend=dict(orientation="h", y=-0.12, x=0),
+        barmode="overlay",
     )
     return fig
+
+
+def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure:
+    """FBref/StatsBomb-style pizza chart: one wedge per metric, wedge length =
+    percentile, colour = phase of play, percentile value shown on each slice."""
+    data = _clean(profile)
+    if data.empty:
+        raise ValueError("profile has no percentiles to plot")
+    n = len(data)
+    step = 360.0 / n
+    theta = [i * step for i in range(n)]
+    pct = data["percentile"].astype(float).tolist()
+    cats = (
+        data["category"].tolist()
+        if "category" in data.columns
+        else ["Other"] * n
+    )
+    colors = [CATEGORY_COLORS.get(c, "#9ca3af") for c in cats]
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Barpolar(
+            r=[100] * n, theta=theta, width=[step * 0.94] * n,
+            marker_color=colors, opacity=0.14, hoverinfo="skip", showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Barpolar(
+            r=pct, theta=theta, width=[step * 0.94] * n,
+            marker=dict(color=colors, line=dict(color="white", width=1.5)),
+            hovertext=[
+                f"<b>{row['title']}</b><br>Value: {row['value']:g}"
+                f"<br>Percentile: {row['percentile']:.0f}"
+                for _, row in data.iterrows()
+            ],
+            hoverinfo="text",
+            showlegend=False,
+        )
+    )
+    # percentile value bubbles at the wedge tips (mplsoccer style)
+    fig.add_trace(
+        go.Scatterpolar(
+            r=[max(p, 7) for p in pct], theta=theta, mode="markers+text",
+            marker=dict(size=21, color=colors, line=dict(color="white", width=1.5)),
+            text=[f"<b>{p:.0f}</b>" for p in pct],
+            textfont=dict(size=10, color="white"),
+            hoverinfo="skip", showlegend=False,
+        )
+    )
+    for cat in dict.fromkeys(cats):
+        fig.add_trace(
+            go.Barpolar(r=[None], theta=[None], name=cat,
+                        marker_color=CATEGORY_COLORS.get(cat, "#9ca3af"))
+        )
+    fig.update_layout(
+        polar_barmode="overlay",
+        polar=dict(
+            radialaxis=dict(range=[0, 100], showticklabels=False,
+                            gridcolor=GRID, tickvals=[25, 50, 75]),
+            angularaxis=dict(
+                tickvals=theta,
+                ticktext=[_wrap_label(_short_title(t)) for t in data["title"]],
+                tickfont=dict(size=10),
+                gridcolor=PAPER,
+                rotation=90,
+                direction="clockwise",
+            ),
+            bgcolor=PAPER,
+        ),
+        title=dict(
+            text=(
+                f"<b>{name}</b><br>"
+                f"<sup>{_wrap_label('Percentile rank vs ' + peer_label, 44)}</sup>"
+            ),
+            x=0.5, font=dict(size=15),
+        ),
+        font=FONT,
+        paper_bgcolor=PAPER,
+        legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
+        margin=dict(l=70, r=70, t=80, b=60),
+        height=520,
+    )
+    return fig
+
+
+def _wrap_label(text: str, width: int = 14) -> str:
+    words = str(text).split()
+    lines = [""]
+    for word in words:
+        if len(lines[-1]) + len(word) + 1 > width and lines[-1]:
+            lines.append(word)
+        else:
+            lines[-1] = (lines[-1] + " " + word).strip()
+    return "<br>".join(lines)
 
 
 def comparison_figure(
@@ -280,6 +406,161 @@ def detailed_stats_figure(table: pd.DataFrame) -> go.Figure:
         margin=dict(l=10, r=30, t=10, b=40),
         height=max(400, 24 * len(data) + 90),
         showlegend=False,
+    )
+    return fig
+
+
+SHOT_COLORS = {
+    "Goal": "#16a34a",
+    "AttemptSaved": "#2563eb",
+    "Miss": "#9ca3af",
+    "Post": "#f59e0b",
+}
+_PITCH_LEN, _PITCH_WID = 105.0, 68.0
+
+
+def _pitch_shapes() -> list[dict]:
+    """Attacking-half pitch outline (goal at the top), FotMob metre coords
+    rotated so y_plot = pitch x (length), x_plot = pitch y (width)."""
+    line = dict(color="#94a3b8", width=1.5)
+    half = _PITCH_LEN / 2
+    shapes = [
+        # outer half-pitch
+        dict(type="rect", x0=0, y0=half, x1=_PITCH_WID, y1=_PITCH_LEN, line=line),
+        # penalty area (40.32m wide, 16.5m deep)
+        dict(type="rect", x0=(_PITCH_WID - 40.32) / 2, y0=_PITCH_LEN - 16.5,
+             x1=(_PITCH_WID + 40.32) / 2, y1=_PITCH_LEN, line=line),
+        # six-yard box (18.32m wide, 5.5m deep)
+        dict(type="rect", x0=(_PITCH_WID - 18.32) / 2, y0=_PITCH_LEN - 5.5,
+             x1=(_PITCH_WID + 18.32) / 2, y1=_PITCH_LEN, line=line),
+        # goal
+        dict(type="rect", x0=(_PITCH_WID - 7.32) / 2, y0=_PITCH_LEN,
+             x1=(_PITCH_WID + 7.32) / 2, y1=_PITCH_LEN + 1.5,
+             line=line, fillcolor="#e2e8f0"),
+        # penalty arc
+        dict(type="path",
+             path=_arc_path(_PITCH_WID / 2, _PITCH_LEN - 11.0, 9.15, 205, 335),
+             line=line),
+        # centre circle arc at the halfway line
+        dict(type="path",
+             path=_arc_path(_PITCH_WID / 2, half, 9.15, 0, 180),
+             line=line),
+    ]
+    return shapes
+
+
+def _arc_path(cx: float, cy: float, r: float, deg0: float, deg1: float) -> str:
+    steps = 40
+    angles = np.radians(np.linspace(deg0, deg1, steps))
+    points = [f"{cx + r * np.cos(a):.2f},{cy + r * np.sin(a):.2f}" for a in angles]
+    return "M " + " L ".join(points)
+
+
+def shot_map_figure(shotmap: pd.DataFrame, name: str, season: str) -> go.Figure:
+    """Understat-style xG shot map on the attacking half of a pitch. Marker
+    size scales with xG; colour encodes the outcome."""
+    shots = shotmap.dropna(subset=["x", "y"]).copy()
+    if shots.empty:
+        raise ValueError("no shots to plot")
+    shots["event"] = shots["event"].fillna("Miss")
+
+    fig = go.Figure()
+    for event, event_label in (
+        ("Goal", "Goal"), ("AttemptSaved", "Saved"),
+        ("Post", "Woodwork"), ("Miss", "Miss/Blocked"),
+    ):
+        subset = shots[shots["event"] == event] if event != "Miss" else shots[
+            ~shots["event"].isin(["Goal", "AttemptSaved", "Post"])
+        ]
+        if subset.empty:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=subset["y"], y=subset["x"], mode="markers", name=event_label,
+                marker=dict(
+                    size=(subset["xg"].clip(0.02, 1.0) ** 0.5) * 26,
+                    color=SHOT_COLORS.get(event, "#9ca3af"),
+                    opacity=0.85 if event == "Goal" else 0.55,
+                    line=dict(width=1, color="white"),
+                ),
+                hovertext=[
+                    f"<b>{row['event']}</b> · min {row['minute']}"
+                    f"<br>xG {row['xg']:.2f} · {row['shot_type'] or ''}"
+                    f"<br>{row['situation'] or ''}"
+                    for _, row in subset.iterrows()
+                ],
+                hoverinfo="text",
+            )
+        )
+    goals = int((shots["event"] == "Goal").sum())
+    total_xg = float(shots["xg"].sum())
+    fig.add_annotation(
+        x=_PITCH_WID / 2, y=_PITCH_LEN / 2 + 3,
+        text=(f"{len(shots)} shots · {goals} goals · {total_xg:.1f} xG · "
+              f"{total_xg / len(shots):.2f} xG/shot"),
+        showarrow=False, font=dict(size=12, color="#475569"),
+    )
+    fig.update_layout(
+        shapes=_pitch_shapes(),
+        xaxis=dict(range=[-3, _PITCH_WID + 3], visible=False,
+                   scaleanchor="y", scaleratio=1),
+        yaxis=dict(range=[_PITCH_LEN / 2 - 2, _PITCH_LEN + 4], visible=False),
+        title=dict(text=f"<b>{name}</b> — shot map, {season}", x=0.5,
+                   font=dict(size=14)),
+        font=FONT,
+        plot_bgcolor=PAPER,
+        paper_bgcolor=PAPER,
+        legend=dict(orientation="h", y=-0.02, x=0.5, xanchor="center",
+                    itemsizing="constant"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        height=560,
+    )
+    return fig
+
+
+def comparison_radar_figure(
+    profile_a: pd.DataFrame,
+    profile_b: pd.DataFrame,
+    name_a: str,
+    name_b: str,
+) -> go.Figure:
+    """StatsBomb-style overlay radar of two players' percentiles."""
+    a = _clean(profile_a).set_index("metric")
+    b = _clean(profile_b).set_index("metric")
+    shared = [m for m in a.index if m in b.index]
+    if not shared:
+        raise ValueError("no shared metrics between the two profiles")
+    theta = [_short_title(a.loc[m, "title"]) for m in shared]
+    ra = [float(a.loc[m, "percentile"]) for m in shared]
+    rb = [float(b.loc[m, "percentile"]) for m in shared]
+
+    fig = go.Figure()
+    for values, name, color, fill in (
+        (ra, name_a, COLOR_A, "rgba(37, 99, 235, 0.28)"),
+        (rb, name_b, COLOR_B, "rgba(220, 38, 38, 0.24)"),
+    ):
+        fig.add_trace(
+            go.Scatterpolar(
+                r=values + values[:1], theta=theta + theta[:1],
+                fill="toself", fillcolor=fill,
+                line=dict(color=color, width=2), name=name,
+                hovertext=[f"{name} · {t}: {v:.0f} pct"
+                           for t, v in zip(theta + theta[:1], values + values[:1])],
+                hoverinfo="text",
+            )
+        )
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(range=[0, 100], tickvals=[25, 50, 75],
+                            tickfont=dict(size=9, color="#9ca3af"), gridcolor=GRID),
+            angularaxis=dict(tickfont=dict(size=11), gridcolor=GRID),
+            bgcolor=PAPER,
+        ),
+        font=FONT,
+        paper_bgcolor=PAPER,
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        margin=dict(l=70, r=70, t=60, b=40),
+        height=480,
     )
     return fig
 
