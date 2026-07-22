@@ -1,0 +1,56 @@
+"""Offline tests for client caching and rate limiting internals."""
+
+import threading
+import time
+
+from fotmob_analytics.client import (
+    FotMobClient,
+    league_logo_url,
+    player_image_url,
+    team_logo_url,
+)
+
+
+def make_client(tmp_path, interval=0.05):
+    return FotMobClient(cache_dir=tmp_path, min_request_interval=interval)
+
+
+class TestCache:
+    def test_roundtrip(self, tmp_path):
+        client = make_client(tmp_path)
+        client._write_cache("http://x/1", {"a": 1})
+        assert client._read_cache("http://x/1", ttl=60) == {"a": 1}
+
+    def test_expiry(self, tmp_path):
+        client = make_client(tmp_path)
+        client._write_cache("http://x/2", {"a": 2})
+        assert client._read_cache("http://x/2", ttl=0) is None
+
+    def test_corrupt_cache_is_discarded(self, tmp_path):
+        client = make_client(tmp_path)
+        path = client._cache_path("http://x/3")
+        path.write_text("{not json")
+        assert client._read_cache("http://x/3", ttl=60) is None
+        assert not path.exists()
+
+
+class TestThrottle:
+    def test_spaces_requests_across_threads(self, tmp_path):
+        client = make_client(tmp_path, interval=0.05)
+        n = 8
+        start = time.monotonic()
+        threads = [threading.Thread(target=client._throttle) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        elapsed = time.monotonic() - start
+        # n requests need at least (n-1) * interval of total spacing
+        assert elapsed >= (n - 1) * 0.05 * 0.9
+
+
+class TestImageUrls:
+    def test_urls(self):
+        assert player_image_url(737066).endswith("/playerimages/737066.png")
+        assert team_logo_url(9825).endswith("/teamlogo/9825_small.png")
+        assert league_logo_url(47).endswith("/leaguelogo/47.png")

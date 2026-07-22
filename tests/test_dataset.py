@@ -39,7 +39,11 @@ class FakeClient:
     def resolve_season_id(self, league_id, season):
         return 999, "2025/2026"
 
-    def league_deep_stats(self, league_id, season_id, stat, kind="players"):
+    def is_historical_season(self, league_id, season_id):
+        return False
+
+    def league_deep_stats(self, league_id, season_id, stat, kind="players",
+                          historical=False):
         source = self.player_stats if kind == "players" else self.team_stats
         return {"statsData": source.get(stat, [])}
 

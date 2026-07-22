@@ -1,15 +1,17 @@
 """Build tidy pandas tables of player and team stats from FotMob data.
 
 FotMob exposes league season stats as one leaderboard per stat. The
-:class:`DatasetBuilder` fetches every stat we care about, pivots the
-leaderboards into one row per player (or team), and enriches player rows with
-squad information (age, height, nationality, market value, position labels).
+:class:`DatasetBuilder` fetches every stat we care about (concurrently),
+pivots the leaderboards into one row per player (or team), and enriches
+player rows with squad information (age, height, nationality, market value,
+position labels).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Iterable, Sequence
 
 import pandas as pd
 
@@ -18,10 +20,16 @@ from fotmob_analytics.client import FotMobClient, FotMobError
 
 logger = logging.getLogger(__name__)
 
+# Callback signature: (label, fraction_complete 0..1)
+ProgressFn = Callable[[str, float], None]
+
+_MAX_WORKERS = 6
+
 
 class DatasetBuilder:
-    def __init__(self, client: FotMobClient | None = None) -> None:
+    def __init__(self, client: FotMobClient | None = None, max_workers: int = _MAX_WORKERS) -> None:
         self.client = client or FotMobClient()
+        self.max_workers = max_workers
 
     # -- players -------------------------------------------------------------
 
@@ -30,19 +38,31 @@ class DatasetBuilder:
         league_id: int,
         season: str | int | None = None,
         stats: Sequence[str] | None = None,
+        progress: ProgressFn | None = None,
     ) -> pd.DataFrame:
         """One row per player with all requested stats for a league season."""
         season_id, season_name = self.client.resolve_season_id(league_id, season)
         stat_names = list(stats) if stats is not None else config.all_template_metrics()
+        historical = self.client.is_historical_season(league_id, season_id)
 
-        rows: dict[int, dict] = {}
-        for stat in stat_names:
+        def fetch(stat: str) -> tuple[str, list[dict]]:
             try:
-                deep = self.client.league_deep_stats(league_id, season_id, stat)
+                deep = self.client.league_deep_stats(
+                    league_id, season_id, stat, historical=historical
+                )
+                return stat, deep.get("statsData", [])
             except FotMobError:
                 logger.warning("stat %s unavailable for league %s", stat, league_id)
-                continue
-            for entry in deep.get("statsData", []):
+                return stat, []
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            results = list(pool.map(fetch, stat_names))
+        if progress:
+            progress("stats fetched", 0.6)
+
+        rows: dict[int, dict] = {}
+        for stat, entries in results:
+            for entry in entries:
                 pid = entry["id"]
                 row = rows.setdefault(
                     pid,
@@ -56,8 +76,7 @@ class DatasetBuilder:
                         "season": season_name,
                     },
                 )
-                value = (entry.get("statValue") or {}).get("value")
-                row[stat] = value
+                row[stat] = (entry.get("statValue") or {}).get("value")
                 if row.get("position_id") is None and entry.get("position") is not None:
                     row["position_id"] = entry["position"]
 
@@ -71,6 +90,8 @@ class DatasetBuilder:
         df["position_group"] = df["position_id"].map(config.position_group_from_id)
 
         squad_info = self._league_squad_info(league_id)
+        if progress:
+            progress("squads fetched", 0.95)
         if not squad_info.empty:
             df = df.merge(squad_info, on="player_id", how="left")
             # Squad position labels are more precise than the deep-stats grid id.
@@ -94,14 +115,19 @@ class DatasetBuilder:
         league_ids: Iterable[int],
         season: str | int | None = None,
         stats: Sequence[str] | None = None,
+        progress: ProgressFn | None = None,
     ) -> pd.DataFrame:
         """Concatenated player tables for several leagues.
 
         ``season`` is matched per league by label (e.g. ``2025/2026``); passing
         ``None`` selects each league's latest season with data.
         """
+        ids = list(league_ids)
         frames = []
-        for league_id in league_ids:
+        for index, league_id in enumerate(ids):
+            if progress:
+                league = config.LEAGUES.get(league_id)
+                progress(league.name if league else str(league_id), index / max(len(ids), 1))
             try:
                 frame = self.league_player_table(league_id, season=season, stats=stats)
             except FotMobError as exc:
@@ -109,6 +135,8 @@ class DatasetBuilder:
                 continue
             if not frame.empty:
                 frames.append(frame)
+        if progress:
+            progress("done", 1.0)
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True, sort=False)
@@ -123,18 +151,16 @@ class DatasetBuilder:
         except (FotMobError, KeyError, IndexError, TypeError):
             team_entries = []
 
-        records: list[dict] = []
-        for entry in team_entries:
-            team_id = entry.get("id")
-            if not team_id:
-                continue
+        team_ids = [entry["id"] for entry in team_entries if entry.get("id")]
+
+        def fetch(team_id: int) -> list[dict]:
             try:
                 team = self.client.team(team_id)
             except FotMobError:
-                continue
+                return []
             team_name = team["details"].get("shortName") or team["details"].get("name")
-            squad = (team.get("squad") or {}).get("squad") or []
-            for group in squad:
+            records = []
+            for group in (team.get("squad") or {}).get("squad") or []:
                 if group.get("title") == "coach":
                     continue
                 for member in group.get("members", []):
@@ -149,7 +175,12 @@ class DatasetBuilder:
                             "position_label": member.get("positionIdsDesc"),
                         }
                     )
-        df = pd.DataFrame(records)
+            return records
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            all_records = [r for batch in pool.map(fetch, team_ids) for r in batch]
+
+        df = pd.DataFrame(all_records)
         if df.empty:
             return df
         return df.drop_duplicates(subset="player_id", keep="first")
@@ -165,17 +196,24 @@ class DatasetBuilder:
         """One row per team with all requested team stats for a league season."""
         season_id, season_name = self.client.resolve_season_id(league_id, season)
         stat_names = list(stats) if stats is not None else list(config.TEAM_STAT_TITLES)
+        historical = self.client.is_historical_season(league_id, season_id)
 
-        rows: dict[int, dict] = {}
-        for stat in stat_names:
+        def fetch(stat: str) -> tuple[str, list[dict]]:
             try:
                 deep = self.client.league_deep_stats(
-                    league_id, season_id, stat, kind="teams"
+                    league_id, season_id, stat, kind="teams", historical=historical
                 )
+                return stat, deep.get("statsData", [])
             except FotMobError:
                 logger.warning("team stat %s unavailable for league %s", stat, league_id)
-                continue
-            for entry in deep.get("statsData", []):
+                return stat, []
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            results = list(pool.map(fetch, stat_names))
+
+        rows: dict[int, dict] = {}
+        for stat, entries in results:
+            for entry in entries:
                 tid = entry["teamId"]
                 row = rows.setdefault(
                     tid,

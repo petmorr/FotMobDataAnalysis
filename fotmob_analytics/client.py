@@ -1,4 +1,5 @@
-"""Thin FotMob API client with on-disk caching and polite rate limiting.
+"""Thin FotMob API client with on-disk caching, polite rate limiting and
+thread-safe concurrent use.
 
 Endpoints used (all public, read-only):
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -25,21 +27,47 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.fotmob.com/api/data"
 SEARCH_URL = "https://apigw.fotmob.com/searchapi/suggest"
+IMAGE_BASE = "https://images.fotmob.com/image_resources"
 
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "fotmob-analytics"
-DEFAULT_CACHE_TTL = 6 * 3600  # seconds
+DEFAULT_CACHE_TTL = 6 * 3600  # seconds; applies to live/current data
+HISTORICAL_CACHE_TTL = 30 * 24 * 3600  # finished seasons barely change
+
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 
 class FotMobError(RuntimeError):
     """Raised when the FotMob API returns an unusable response."""
 
 
+def player_image_url(player_id: int) -> str:
+    return f"{IMAGE_BASE}/playerimages/{player_id}.png"
+
+
+def team_logo_url(team_id: int) -> str:
+    return f"{IMAGE_BASE}/logo/teamlogo/{team_id}_small.png"
+
+
+def league_logo_url(league_id: int) -> str:
+    return f"{IMAGE_BASE}/logo/leaguelogo/{league_id}.png"
+
+
 class FotMobClient:
+    """HTTP client safe for use from multiple threads.
+
+    A process-wide rate limiter spaces requests ``min_request_interval``
+    seconds apart regardless of thread count; each thread gets its own
+    :class:`requests.Session`.
+    """
+
     def __init__(
         self,
         cache_dir: str | Path | None = None,
         cache_ttl: float = DEFAULT_CACHE_TTL,
-        min_request_interval: float = 0.25,
+        min_request_interval: float = 0.15,
         timeout: float = 20.0,
     ) -> None:
         self.cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
@@ -47,17 +75,18 @@ class FotMobClient:
         self.cache_ttl = cache_ttl
         self.min_request_interval = min_request_interval
         self.timeout = timeout
-        self._last_request_at = 0.0
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                ),
-                "Accept": "application/json",
-            }
-        )
+        self._rate_lock = threading.Lock()
+        self._next_request_at = 0.0
+        self._local = threading.local()
+
+    @property
+    def _session(self) -> requests.Session:
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+            self._local.session = session
+        return session
 
     # -- low level ---------------------------------------------------------
 
@@ -65,26 +94,48 @@ class FotMobClient:
         digest = hashlib.sha256(url.encode()).hexdigest()[:32]
         return self.cache_dir / f"{digest}.json"
 
-    def _get_json(self, url: str, use_cache: bool = True) -> Any:
+    def _read_cache(self, url: str, ttl: float) -> Any | None:
         cache_file = self._cache_path(url)
-        if use_cache and cache_file.exists():
-            age = time.time() - cache_file.stat().st_mtime
-            if age < self.cache_ttl:
-                try:
-                    return json.loads(cache_file.read_text())
-                except json.JSONDecodeError:
-                    cache_file.unlink(missing_ok=True)
+        if not cache_file.exists():
+            return None
+        if time.time() - cache_file.stat().st_mtime >= ttl:
+            return None
+        try:
+            return json.loads(cache_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            cache_file.unlink(missing_ok=True)
+            return None
 
-        wait = self.min_request_interval - (time.time() - self._last_request_at)
+    def _write_cache(self, url: str, data: Any) -> None:
+        cache_file = self._cache_path(url)
+        tmp = cache_file.with_suffix(f".{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps(data))
+            tmp.replace(cache_file)
+        except OSError:  # cache is best-effort; never fail a request over it
+            tmp.unlink(missing_ok=True)
+
+    def _throttle(self) -> None:
+        """Global rate limit: space requests evenly across all threads."""
+        with self._rate_lock:
+            now = time.monotonic()
+            wait = self._next_request_at - now
+            self._next_request_at = max(now, self._next_request_at) + self.min_request_interval
         if wait > 0:
             time.sleep(wait)
 
-        logger.debug("GET %s", url)
+    def _get_json(self, url: str, ttl: float | None = None) -> Any:
+        ttl = self.cache_ttl if ttl is None else ttl
+        cached = self._read_cache(url, ttl)
+        if cached is not None:
+            return cached
+
         last_error: Exception | None = None
         for attempt in range(3):
+            self._throttle()
             try:
+                logger.debug("GET %s", url)
                 resp = self._session.get(url, timeout=self.timeout)
-                self._last_request_at = time.time()
                 if resp.status_code == 429:
                     time.sleep(2.0 * (attempt + 1))
                     continue
@@ -97,15 +148,15 @@ class FotMobClient:
         else:
             raise FotMobError(f"FotMob request failed: {url}") from last_error
 
-        cache_file.write_text(json.dumps(data))
+        self._write_cache(url, data)
         return data
 
-    def _api(self, path: str, **params: Any) -> Any:
+    def _api(self, path: str, ttl: float | None = None, **params: Any) -> Any:
         query = urlencode({k: v for k, v in params.items() if v is not None})
         url = f"{BASE_URL}/{path}"
         if query:
             url = f"{url}?{query}"
-        return self._get_json(url)
+        return self._get_json(url, ttl=ttl)
 
     # -- endpoints ----------------------------------------------------------
 
@@ -128,15 +179,22 @@ class FotMobClient:
         return data
 
     def league_deep_stats(
-        self, league_id: int, season_id: int, stat: str, kind: str = "players"
+        self,
+        league_id: int,
+        season_id: int,
+        stat: str,
+        kind: str = "players",
+        historical: bool = False,
     ) -> dict:
         """One stat leaderboard for a league season.
 
         ``season_id`` is FotMob's numeric tournament season id (e.g. 27110 for
-        Premier League 2025/2026), not the "2025/2026" label.
+        Premier League 2025/2026), not the "2025/2026" label. Pass
+        ``historical=True`` for finished seasons to cache them for much longer.
         """
         data = self._api(
             "leagueseasondeepstats",
+            ttl=HISTORICAL_CACHE_TTL if historical else None,
             id=league_id,
             season=season_id,
             type=kind,
@@ -200,6 +258,15 @@ class FotMobClient:
         raise FotMobError(
             f"Season {season!r} not found for league {league_id}. Available: {available}"
         )
+
+    def is_historical_season(self, league_id: int, season_id: int) -> bool:
+        """True when ``season_id`` is not one of the league's two most recent
+        seasons (i.e. its stats are effectively frozen)."""
+        try:
+            recent = [s["id"] for s in self.league_seasons(league_id)[:2]]
+        except FotMobError:
+            return False
+        return season_id not in recent
 
     def search_players(self, term: str) -> list[dict]:
         data = self.search(term)
