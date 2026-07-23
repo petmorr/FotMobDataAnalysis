@@ -117,10 +117,13 @@ def similar_players(
     if pool.empty:
         return pool
     player_id = player_row["player_id"]
-    combined = pool[pool["player_id"] != player_id]
-    combined = pd.concat(
-        [combined, player_row.to_frame().T], ignore_index=True, sort=False
-    )
+    others_pool = pool[pool["player_id"] != player_id]
+    if others_pool.empty:
+        return others_pool
+    # Align the player's row to the pool columns before concat so no frame
+    # contributes empty/all-NA-only entries (deprecated in pandas 2.x).
+    row_frame = player_row.to_frame().T.reindex(columns=others_pool.columns)
+    combined = pd.concat([others_pool, row_frame], ignore_index=True, sort=False)
     z = zscore_matrix(combined, metrics)
     target = z.iloc[-1].to_numpy(dtype=float)
     others = z.iloc[:-1].to_numpy(dtype=float)

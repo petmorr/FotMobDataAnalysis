@@ -2,12 +2,42 @@
 
 from __future__ import annotations
 
+from typing import Iterable
+
 import pandas as pd
 
 # Leading characters that spreadsheet apps interpret as formulas. Exported
 # CSVs are opened in Excel/Sheets, so cells starting with these are escaped
 # to prevent CSV/formula injection (OWASP: CSV Injection).
 _FORMULA_PREFIXES = ("=", "+", "@", "\t", "\r")
+
+
+def concat_frames(
+    frames: Iterable[pd.DataFrame],
+    *,
+    ignore_index: bool = True,
+    sort: bool = False,
+) -> pd.DataFrame:
+    """``pd.concat`` that is quiet under pandas 2.x's empty/all-NA deprecation.
+
+    Empty frames and all-NA columns are dropped *before* concatenation so the
+    result dtypes match the historical (pre-deprecation) behaviour. Returns an
+    empty DataFrame when nothing usable remains.
+    """
+    usable: list[pd.DataFrame] = []
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        cleaned = frame.dropna(axis=1, how="all")
+        if cleaned.empty or bool(cleaned.isna().to_numpy().all()):
+            continue
+        usable.append(cleaned)
+    if not usable:
+        return pd.DataFrame()
+    if len(usable) == 1:
+        out = usable[0].copy()
+        return out.reset_index(drop=True) if ignore_index else out
+    return pd.concat(usable, ignore_index=ignore_index, sort=sort)
 
 
 def _sanitize_cell(value: object) -> object:

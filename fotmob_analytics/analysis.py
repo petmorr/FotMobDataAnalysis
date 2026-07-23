@@ -15,6 +15,7 @@ from fotmob_analytics.client import FotMobClient, FotMobError
 from fotmob_analytics.dataset import DatasetBuilder
 from fotmob_analytics.details import DetailedStats, fetch_detailed_stats
 from fotmob_analytics.peers import PeerSpec
+from fotmob_analytics.util import concat_frames
 
 logger = logging.getLogger(__name__)
 
@@ -420,9 +421,11 @@ class PlayerAnalyzer:
 
         # Similarity search runs over the widest pool available, without the
         # age restriction (style twins can be any age) but same position.
-        similarity_pool = pd.concat(
-            [league_pool, cross_peers], ignore_index=True, sort=False
-        ).drop_duplicates(subset=["player_id", "league_id"])
+        # Empty frames are excluded before concat (deprecated in pandas 2.x).
+        pool_frames = [f for f in (league_pool, cross_peers) if not f.empty]
+        similarity_pool = concat_frames(pool_frames).drop_duplicates(
+            subset=["player_id", "league_id"]
+        )
         similarity_pool = similarity_pool[
             (similarity_pool["position_group"] == ctx.position_group)
             & (similarity_pool["mins_played"].fillna(0) >= min_minutes)

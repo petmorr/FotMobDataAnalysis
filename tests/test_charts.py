@@ -1,3 +1,5 @@
+import warnings
+
 import pandas as pd
 import pytest
 
@@ -140,6 +142,23 @@ class TestPlayerCard:
         assert len(fig.layout.images) == 0
         texts = [a.text for a in fig.layout.annotations]
         assert any("<b>X</b>" in t for t in texts)
+
+    def test_card_with_no_weak_metrics(self):
+        """All-strong profile → empty weak set must not concat-warn/error."""
+        profile = pd.DataFrame(
+            {
+                "metric": ["a", "b", "c", "d", "e"],
+                "title": ["A", "B", "C", "D", "E"],
+                "category": ["Attacking"] * 5,
+                "percentile": [90.0, 88.0, 85.0, 80.0, 75.0],
+                "value": [1, 2, 3, 4, 5],
+            }
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            fig = charts.player_card_figure({"name": "X"}, profile, peer_label="p")
+        assert not any(issubclass(w.category, FutureWarning) for w in caught)
+        assert len(fig.layout.shapes) >= 2 * 5 + 1
 
     def test_card_requires_percentiles(self, profile_a):
         empty = profile_a.assign(percentile=None)

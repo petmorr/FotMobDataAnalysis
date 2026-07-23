@@ -1,6 +1,8 @@
+import warnings
+
 import pandas as pd
 
-from fotmob_analytics.util import md_escape, safe_csv_bytes
+from fotmob_analytics.util import concat_frames, md_escape, safe_csv_bytes
 
 
 class TestSafeCsv:
@@ -34,3 +36,29 @@ class TestMdEscape:
 
     def test_non_string_input(self):
         assert md_escape(42) == "42"
+
+
+class TestConcatFrames:
+    def test_skips_empty_and_all_na(self):
+        a = pd.DataFrame({"id": [1, 2], "goals": [1.0, 2.0]})
+        empty = pd.DataFrame()
+        all_na = pd.DataFrame({"id": [pd.NA, pd.NA], "goals": [pd.NA, pd.NA]})
+        b = pd.DataFrame({"id": [3], "assists": [1.0]})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = concat_frames([a, empty, all_na, b])
+        assert not any(issubclass(w.category, FutureWarning) for w in caught)
+        assert list(out["id"]) == [1, 2, 3]
+        assert "goals" in out.columns and "assists" in out.columns
+
+    def test_all_empty_returns_empty(self):
+        out = concat_frames([pd.DataFrame(), pd.DataFrame({"a": [pd.NA]})])
+        assert out.empty
+
+    def test_single_frame_copy(self):
+        a = pd.DataFrame({"id": [1], "x": [2.0]})
+        out = concat_frames([a])
+        assert list(out["id"]) == [1]
+        out.loc[0, "id"] = 99
+        assert a.loc[0, "id"] == 1
+

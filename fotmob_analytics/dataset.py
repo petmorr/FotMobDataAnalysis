@@ -17,6 +17,7 @@ import pandas as pd
 
 from fotmob_analytics import config
 from fotmob_analytics.client import FotMobClient, FotMobError
+from fotmob_analytics.util import concat_frames
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,13 @@ class DatasetBuilder:
         if df.empty:
             return df
 
+        # Ensure every requested stat is present as float so multi-league
+        # concats share a schema and downstream math never sees object cols.
+        for stat in stat_names:
+            if stat not in df.columns:
+                df[stat] = pd.NA
+            df[stat] = pd.to_numeric(df[stat], errors="coerce")
+
         league = config.LEAGUES.get(league_id)
         df["league"] = league.name if league else str(league_id)
         df["league_tier"] = league.tier if league else None
@@ -140,7 +148,7 @@ class DatasetBuilder:
             progress("done", 1.0)
         if not frames:
             return pd.DataFrame()
-        return pd.concat(frames, ignore_index=True, sort=False)
+        return concat_frames(frames)
 
     def _league_squad_info(self, league_id: int) -> pd.DataFrame:
         """Age/height/nationality/market value for every squad member of every
@@ -231,6 +239,10 @@ class DatasetBuilder:
         df = pd.DataFrame(list(rows.values()))
         if df.empty:
             return df
+        for stat in stat_names:
+            if stat not in df.columns:
+                df[stat] = pd.NA
+            df[stat] = pd.to_numeric(df[stat], errors="coerce")
         league = config.LEAGUES.get(league_id)
         df["league"] = league.name if league else str(league_id)
 

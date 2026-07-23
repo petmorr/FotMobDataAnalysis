@@ -584,7 +584,9 @@ def player_card_figure(
     weak = data.sort_values("percentile").head(weak_n)
     weak = weak[weak["percentile"] < 40.0]
     weak = weak[~weak["metric"].isin(best["metric"])]
-    rows = pd.concat([best, weak]).iloc[::-1]
+    # Skip empty weak set — concat with an empty frame is deprecated in pandas 2.x.
+    rows = best if weak.empty else pd.concat([best, weak])
+    rows = rows.iloc[::-1]
 
     fig = go.Figure()
 

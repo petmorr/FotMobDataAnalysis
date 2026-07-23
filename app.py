@@ -23,7 +23,7 @@ from fotmob_analytics.charts import (
 )
 from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
 from fotmob_analytics.peers import PeerSpec
-from fotmob_analytics.util import md_escape, safe_csv_bytes
+from fotmob_analytics.util import concat_frames, md_escape, safe_csv_bytes
 
 st.set_page_config(
     page_title="FotMob Analytics",
@@ -103,10 +103,33 @@ def role_profile(ctx: dict, season: str | None) -> dict | None:
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def multi_league_players(league_ids: tuple[int, ...], _progress=None) -> pd.DataFrame:
-    return get_analyzer().builder.multi_league_player_table(
-        list(league_ids), season=None, progress=_progress
-    )
+def league_players(league_id: int) -> pd.DataFrame:
+    """Latest-season player table for one league. Cached per league so
+    multi-league pools can be assembled with progress feedback outside any
+    cached function (Streamlit cannot replay UI calls made inside them)."""
+    return get_analyzer().builder.league_player_table(league_id, season=None)
+
+
+def load_league_pool(league_ids: list[int]) -> pd.DataFrame:
+    """Concatenated latest-season tables for several leagues, with a progress
+    bar. All Streamlit elements live here, outside the cached per-league
+    loader, so cache hits replay cleanly."""
+    bar = st.progress(0.0, text="Loading league data...")
+    frames = []
+    for index, league_id in enumerate(league_ids):
+        league = config.LEAGUES.get(league_id)
+        label = league.name if league else str(league_id)
+        bar.progress(index / max(len(league_ids), 1), text=f"Loading {label}...")
+        try:
+            frame = league_players(league_id)
+        except FotMobError:
+            continue
+        if not frame.empty:
+            frames.append(frame)
+    bar.empty()
+    if not frames:
+        return pd.DataFrame()
+    return concat_frames(frames)
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +138,25 @@ def multi_league_players(league_ids: tuple[int, ...], _progress=None) -> pd.Data
 
 def score_text(score: float | None) -> str:
     return "—" if score is None else f"{score:.0f} / 100"
+
+
+def show_plotly(fig, **kwargs) -> None:
+    """st.plotly_chart with a full-width layout across Streamlit versions
+    (older releases reject width="stretch", newer ones deprecate
+    use_container_width)."""
+    try:
+        st.plotly_chart(fig, width="stretch", **kwargs)
+    except TypeError:
+        kwargs.pop("config", None)  # config arg is also newer than some releases
+        st.plotly_chart(fig, use_container_width=True, **kwargs)
+
+
+def show_dataframe(df: pd.DataFrame, **kwargs) -> None:
+    """st.dataframe, full width, compatible across Streamlit versions."""
+    try:
+        st.dataframe(df, width="stretch", **kwargs)
+    except TypeError:
+        st.dataframe(df, use_container_width=True, **kwargs)
 
 
 def player_picker(label: str, key: str, container=None) -> dict | None:
@@ -234,7 +276,7 @@ def render_player_card(
         role_score=score,
         photo_url=player_image_url(ctx["player_id"]),
     )
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": True})
+    show_plotly(fig, config={"displayModeBar": True})
 
 
 def profile_download(profile: pd.DataFrame, filename: str, label: str) -> None:
@@ -300,15 +342,9 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
     label_b = f"{other['name']} ({other_sp.season})"
     tab_metrics, tab_radar = st.tabs(["📊 Metric by metric", "🕸 Radar overlay"])
     with tab_metrics:
-        st.plotly_chart(
-            comparison_figure(base.profile, other_sp.profile, label_a, label_b),
-            width="stretch",
-        )
+        show_plotly(comparison_figure(base.profile, other_sp.profile, label_a, label_b))
     with tab_radar:
-        st.plotly_chart(
-            comparison_radar_figure(base.profile, other_sp.profile, label_a, label_b),
-            width="stretch",
-        )
+        show_plotly(comparison_radar_figure(base.profile, other_sp.profile, label_a, label_b))
     diffs = key_differences(base.profile, other_sp.profile, ctx["name"], other["name"])
     if not diffs.empty:
         st.subheader("Key differences")
@@ -390,13 +426,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         st.caption("Set the filters and press **Build comparison**.")
         return
 
-    progress = st.progress(0.0, text="Loading league data...")
-
-    def on_progress(label: str, fraction: float) -> None:
-        progress.progress(min(fraction, 1.0), text=f"Loading {label}...")
-
-    pool = multi_league_players(tuple(league_ids), _progress=on_progress)
-    progress.empty()
+    pool = load_league_pool(list(league_ids))
     if pool.empty:
         st.error("No data found for the selected leagues.")
         return
@@ -432,7 +462,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         ctx, base, group_profile, peer_label=desc,
         role=group_role, score=group_score,
     )
-    st.plotly_chart(percentile_bar_figure(group_profile, desc), width="stretch")
+    show_plotly(percentile_bar_figure(group_profile, desc))
 
     col_s, col_w = st.columns(2)
     g_str, g_weak = metrics.strengths_and_weaknesses(group_profile)
@@ -461,7 +491,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         )
         keep = [c for c in ("Player", "Age", "Club", "League", "Minutes",
                             "Rating", "Similarity") if c in show.columns]
-        st.dataframe(show[keep], width="stretch", hide_index=True)
+        show_dataframe(show[keep], hide_index=True)
 
     profile_download(
         group_profile, f"peer_group_{ctx['player_id']}.csv",
@@ -543,18 +573,14 @@ peer_label = (
 c1, c2 = st.columns([3, 2])
 with c1:
     st.subheader("Percentile profile")
-    st.plotly_chart(
-        percentile_bar_figure(base.profile, peer_label, color_by="category"),
-        width="stretch",
-    )
+    show_plotly(percentile_bar_figure(base.profile, peer_label, color_by="category"))
     profile_download(
         base.profile, f"profile_{ctx['player_id']}.csv", "Download profile (CSV)"
     )
 with c2:
     st.subheader("Overview")
     st.caption(f"{ctx['name']} — percentile rank vs {peer_label}")
-    st.plotly_chart(pizza_figure(base.profile, ctx["name"], peer_label),
-                    width="stretch")
+    show_plotly(pizza_figure(base.profile, ctx["name"], peer_label))
     strengths_weaknesses_lists(base.profile)
 
 # ---- Section 2b: role profile and in-depth stats ---------------------------
@@ -566,7 +592,7 @@ if role is not None:
         st.markdown(
             f"**{role['primary_name']}** — {role['primary_description']}"
         )
-        st.plotly_chart(archetype_figure(role["records"]), width="stretch")
+        show_plotly(archetype_figure(role["records"]))
         st.caption(
             "Fit scores measure how much the player's statistical shape "
             "matches each archetype (50 = league-average shape for the "
@@ -592,17 +618,14 @@ if role is not None:
                                     label_visibility="collapsed")
             table = role["table"][role["table"]["group"].isin(chosen)]
             if not table.dropna(subset=["percentile"]).empty:
-                st.plotly_chart(detailed_stats_figure(table), width="stretch")
+                show_plotly(detailed_stats_figure(table))
             profile_download(
                 role["table"], f"detailed_{ctx['player_id']}.csv",
                 "Download in-depth stats (CSV)",
             )
         if tab_shots is not None:
             with tab_shots:
-                st.plotly_chart(
-                    shot_map_figure(shotmap, ctx["name"], role["season"]),
-                    width="stretch",
-                )
+                show_plotly(shot_map_figure(shotmap, ctx["name"], role["season"]))
                 st.caption(
                     "Marker size scales with xG; green = goal. League matches "
                     "in the selected season."
