@@ -219,6 +219,99 @@ def pizza_figure(profile: pd.DataFrame, name: str, peer_label: str) -> go.Figure
     return fig
 
 
+def category_pizza_figure(
+    profile: pd.DataFrame, name: str, peer_label: str
+) -> go.Figure:
+    """Pizza chart with one wedge per phase of play (Attacking, Creation,
+    Possession, Defending, …).
+
+    Each wedge length is the mean percentile of that category's metrics from
+    ``profile`` — an accumulative summary of the detailed metric pizza.
+    """
+    from fotmob_analytics import metrics as metrics_mod
+
+    summary = metrics_mod.category_profile(profile)
+    if summary.empty:
+        raise ValueError("profile has no categorised percentiles to aggregate")
+
+    n = len(summary)
+    step = 360.0 / n
+    theta = [i * step for i in range(n)]
+    pct = summary["percentile"].astype(float).tolist()
+    cats = summary["category"].tolist()
+    colors = [CATEGORY_COLORS.get(c, "#9ca3af") for c in cats]
+    counts = summary["n_metrics"].astype(int).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Barpolar(
+            r=[100] * n, theta=theta, width=[step * 0.92] * n,
+            marker_color=colors, opacity=0.14, hoverinfo="skip", showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Barpolar(
+            r=pct, theta=theta, width=[step * 0.92] * n,
+            marker=dict(color=colors, line=dict(color="white", width=2)),
+            hovertext=[
+                f"<b>{cat}</b><br>Mean percentile: {p:.0f}"
+                f"<br>Across {k} metric{'s' if k != 1 else ''}"
+                f"<br>vs {peer_label}"
+                for cat, p, k in zip(cats, pct, counts)
+            ],
+            hoverinfo="text",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatterpolar(
+            r=[min(max(p, 18.0), 82.0) for p in pct], theta=theta,
+            mode="markers+text",
+            marker=dict(size=28, color=colors, line=dict(color="white", width=2)),
+            text=[f"<b>{p:.0f}</b>" for p in pct],
+            textfont=dict(size=13, color=[_text_color_for(c) for c in colors]),
+            hoverinfo="skip", showlegend=False,
+        )
+    )
+    for cat in cats:
+        fig.add_trace(
+            go.Barpolar(
+                r=[None], theta=[None], name=cat,
+                marker_color=CATEGORY_COLORS.get(cat, "#9ca3af"),
+            )
+        )
+    fig.update_layout(
+        polar_barmode="overlay",
+        polar=dict(
+            radialaxis=dict(
+                range=[0, 100], showticklabels=False,
+                gridcolor=GRID, tickvals=[25, 50, 75],
+            ),
+            angularaxis=dict(
+                tickvals=theta,
+                ticktext=[f"<b>{c}</b>" for c in cats],
+                tickfont=dict(size=13),
+                gridcolor=PAPER,
+                rotation=90,
+                direction="clockwise",
+            ),
+            bgcolor=PAPER,
+        ),
+        font=FONT,
+        paper_bgcolor=PAPER,
+        legend=dict(
+            orientation="h", y=-0.08, x=0.5, xanchor="center", font=dict(size=12),
+        ),
+        margin=dict(l=60, r=60, t=36, b=48),
+        height=460,
+        title=dict(
+            text=f"<b>{name}</b> · phase-of-play profile",
+            x=0.5, xanchor="center", font=dict(size=14, color="#0f172a"),
+        ),
+    )
+    return fig
+
+
 def _wrap_label(text: str, width: int = 14) -> str:
     words = str(text).split()
     lines = [""]
@@ -669,7 +762,7 @@ def player_card_figure(
     )
 
     # ---- left side: identity block ----
-    text_x = 0.115 if photo_url else 0.0
+    text_x = 0.13 if photo_url else 0.0
     name = personal.get("name", "")
     fig.add_annotation(
         xref="paper", yref="paper", x=text_x, y=0.94,
@@ -758,15 +851,20 @@ def player_card_figure(
     )
 
     if photo_url:
+        # Embed as data-URI preferred (callers should pass one); size the
+        # headshot in the top-left identity column without stretching.
         fig.add_layout_image(
-            dict(source=photo_url, xref="paper", yref="paper",
-                 x=0.0, y=1.0, sizex=0.095, sizey=0.30,
-                 xanchor="left", yanchor="top", layer="above")
+            dict(
+                source=photo_url, xref="paper", yref="paper",
+                x=0.0, y=1.0, sizex=0.11, sizey=0.36,
+                xanchor="left", yanchor="top",
+                sizing="contain", layer="above",
+            )
         )
 
     fig.update_layout(
-        xaxis=dict(visible=False, range=[0, 1]),
-        yaxis=dict(visible=False, range=[0, 1]),
+        xaxis=dict(visible=False, range=[0, 1], fixedrange=True),
+        yaxis=dict(visible=False, range=[0, 1], fixedrange=True),
         font=FONT,
         plot_bgcolor=PAPER,
         paper_bgcolor=PAPER,

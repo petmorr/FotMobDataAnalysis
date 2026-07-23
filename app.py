@@ -12,6 +12,7 @@ from fotmob_analytics import config, metrics
 from fotmob_analytics.analysis import PlayerAnalyzer, PlayerContext, SeasonProfile
 from fotmob_analytics.charts import (
     archetype_figure,
+    category_pizza_figure,
     comparison_figure,
     comparison_radar_figure,
     detailed_stats_figure,
@@ -21,7 +22,12 @@ from fotmob_analytics.charts import (
     player_card_figure,
     shot_map_figure,
 )
-from fotmob_analytics.client import FotMobClient, FotMobError, player_image_url
+from fotmob_analytics.client import (
+    FotMobClient,
+    FotMobError,
+    player_image_data_uri,
+    player_image_url,
+)
 from fotmob_analytics.peers import PeerSpec
 from fotmob_analytics.util import concat_frames, md_escape, safe_csv_bytes
 
@@ -327,6 +333,9 @@ def render_player_card(
         if pd.notna(sp.row.get("mins_played")) else None,
         "rating": sp.row.get("rating") if pd.notna(sp.row.get("rating")) else None,
     }
+    # Embed the headshot as a data-URI — Plotly cannot load FotMob CDN URLs
+    # cross-origin (no CORS), which left the card photo blank.
+    photo = player_image_data_uri(ctx["player_id"])
     fig = player_card_figure(
         personal,
         profile,
@@ -334,7 +343,7 @@ def render_player_card(
         role_name=role["primary_name"] if role else None,
         role_confidence=role["confidence"] if role else None,
         role_score=score,
-        photo_url=player_image_url(ctx["player_id"]),
+        photo_url=photo,
     )
     show_plotly(fig, config={"displayModeBar": True})
 
@@ -541,6 +550,14 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         role=group_role, score=group_score,
     )
     show_plotly(percentile_bar_figure(group_profile, desc, color_by="category"))
+    try:
+        show_plotly(category_pizza_figure(ctx["name"], desc))
+        st.caption(
+            "Phase-of-play pizza: each wedge is the mean percentile of that "
+            "category's metrics."
+        )
+    except ValueError:
+        pass
 
     col_s, col_w = st.columns(2)
     g_str, g_weak = metrics.strengths_and_weaknesses(group_profile)
@@ -748,7 +765,18 @@ with c1:
 with c2:
     st.subheader("Overview")
     st.caption(f"{ctx['name']} — percentile rank vs {peer_label}")
-    show_plotly(pizza_figure(cmp_profile, ctx["name"], peer_label))
+    tab_phase, tab_metrics = st.tabs(["Phase of play", "By metric"])
+    with tab_phase:
+        try:
+            show_plotly(category_pizza_figure(cmp_profile, ctx["name"], peer_label))
+            st.caption(
+                "Each wedge is the **mean percentile** of that phase's metrics "
+                "(Attacking, Creation, Possession, Defending, …)."
+            )
+        except ValueError:
+            st.caption("Not enough categorised metrics for a phase-of-play pizza.")
+    with tab_metrics:
+        show_plotly(pizza_figure(cmp_profile, ctx["name"], peer_label))
     strengths_weaknesses_lists(cmp_profile)
 
 # ---- Section 2b: role profile and in-depth stats ---------------------------

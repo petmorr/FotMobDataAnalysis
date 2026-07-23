@@ -17,6 +17,7 @@ import json
 import logging
 import threading
 import time
+from base64 import b64encode
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -53,6 +54,53 @@ def team_logo_url(team_id: int) -> str:
 
 def league_logo_url(league_id: int) -> str:
     return f"{IMAGE_BASE}/logo/leaguelogo/{league_id}.png"
+
+
+def player_image_data_uri(
+    player_id: int,
+    *,
+    cache_dir: str | Path | None = None,
+    timeout: float = 15.0,
+) -> str | None:
+    """Download a player headshot and return it as a ``data:image/png;base64,…``
+    URI suitable for Plotly ``layout.images``.
+
+    FotMob's CDN does not send CORS headers, so Plotly/Streamlit cannot load
+    the bare HTTPS URL inside a chart — embedding the bytes avoids a blank
+    photo slot on the player card. Results are cached on disk.
+    """
+    url = player_image_url(player_id)
+    root = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+    img_dir = root / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = img_dir / f"player_{player_id}.png"
+
+    content: bytes | None = None
+    if cache_file.exists() and cache_file.stat().st_size > 0:
+        try:
+            content = cache_file.read_bytes()
+        except OSError:
+            content = None
+
+    if content is None:
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": USER_AGENT, "Accept": "image/png,*/*"},
+                timeout=timeout,
+            )
+            if resp.status_code != 200 or not resp.content:
+                return None
+            content = resp.content
+            try:
+                cache_file.write_bytes(content)
+            except OSError:
+                pass
+        except requests.RequestException:
+            return None
+
+    encoded = b64encode(content).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 class FotMobClient:

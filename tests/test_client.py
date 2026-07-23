@@ -6,6 +6,7 @@ import time
 from fotmob_analytics.client import (
     FotMobClient,
     league_logo_url,
+    player_image_data_uri,
     player_image_url,
     team_logo_url,
 )
@@ -54,3 +55,18 @@ class TestImageUrls:
         assert player_image_url(737066).endswith("/playerimages/737066.png")
         assert team_logo_url(9825).endswith("/teamlogo/9825_small.png")
         assert league_logo_url(47).endswith("/leaguelogo/47.png")
+
+    def test_data_uri_from_cached_bytes(self, tmp_path):
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+            b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00"
+            b"\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18"
+            b"\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        img_dir = tmp_path / "images"
+        img_dir.mkdir()
+        (img_dir / "player_1.png").write_bytes(png)
+        uri = player_image_data_uri(1, cache_dir=tmp_path)
+        assert uri is not None
+        assert uri.startswith("data:image/png;base64,")
+        assert len(uri) > 40

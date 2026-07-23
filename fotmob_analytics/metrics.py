@@ -92,6 +92,52 @@ def role_score(profile: pd.DataFrame, weights: dict[str, float]) -> float | None
     return round(total / total_weight, 1)
 
 
+# Phase-of-play categories shown on the aggregate pizza. Overall / Discipline
+# are excluded so the chart stays about on-ball contribution.
+_CATEGORY_PIZZA_ORDER = (
+    "Attacking", "Creation", "Possession", "Defending", "Goalkeeping",
+)
+
+
+def category_profile(profile: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a metric-level percentile profile into one row per phase of play.
+
+    Each category's percentile is the unweighted mean of its member metrics —
+    an accumulative "how good is this player at Attacking / Creation / …"
+    summary suitable for a category pizza chart.
+    """
+    if profile.empty or "category" not in profile.columns:
+        return pd.DataFrame(
+            columns=["metric", "title", "category", "value", "peer_median",
+                     "percentile", "n_metrics"]
+        )
+    data = profile.dropna(subset=["percentile"]).copy()
+    data = data[data["category"].isin(_CATEGORY_PIZZA_ORDER)]
+    if data.empty:
+        return pd.DataFrame(
+            columns=["metric", "title", "category", "value", "peer_median",
+                     "percentile", "n_metrics"]
+        )
+    rows = []
+    for cat in _CATEGORY_PIZZA_ORDER:
+        group = data[data["category"] == cat]
+        if group.empty:
+            continue
+        mean_pct = float(group["percentile"].mean())
+        rows.append(
+            {
+                "metric": f"category:{cat}",
+                "title": cat,
+                "category": cat,
+                "value": round(mean_pct, 1),
+                "peer_median": 50.0,
+                "percentile": round(mean_pct, 1),
+                "n_metrics": int(len(group)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def zscore_matrix(df: pd.DataFrame, metrics: list[str]) -> pd.DataFrame:
     """Column-wise z-scores of ``metrics`` (missing values become 0 = average)."""
     cols = [m for m in metrics if m in df.columns]

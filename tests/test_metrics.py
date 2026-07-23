@@ -108,3 +108,39 @@ class TestStrengthsWeaknesses:
         )
         assert list(strengths["metric"]) == ["a"]
         assert list(weaknesses["metric"]) == ["b"]
+
+
+class TestCategoryProfile:
+    def test_mean_percentile_per_phase(self):
+        profile = pd.DataFrame(
+            {
+                "metric": ["g", "xg", "xa", "dr", "tk"],
+                "title": ["Goals", "xG", "xA", "Dribbles", "Tackles"],
+                "category": [
+                    "Attacking", "Attacking", "Creation", "Possession", "Defending",
+                ],
+                "value": [1, 2, 3, 4, 5],
+                "peer_median": [1, 1, 1, 1, 1],
+                "percentile": [80.0, 60.0, 40.0, 90.0, 20.0],
+            }
+        )
+        summary = metrics.category_profile(profile)
+        assert list(summary["category"]) == [
+            "Attacking", "Creation", "Possession", "Defending",
+        ]
+        assert summary.loc[summary["category"] == "Attacking", "percentile"].iloc[0] == 70.0
+        assert int(summary.loc[summary["category"] == "Attacking", "n_metrics"].iloc[0]) == 2
+
+    def test_skips_overall_and_empty(self):
+        profile = pd.DataFrame(
+            {
+                "metric": ["rating"],
+                "title": ["Rating"],
+                "category": ["Overall"],
+                "value": [7.0],
+                "peer_median": [6.5],
+                "percentile": [80.0],
+            }
+        )
+        assert metrics.category_profile(profile).empty
+        assert metrics.category_profile(pd.DataFrame()).empty

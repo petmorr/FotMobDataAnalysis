@@ -95,6 +95,31 @@ def test_pizza_figure(profile_a):
     assert "scatterpolar" in kinds  # value labels
 
 
+def test_category_pizza_figure(profile_a):
+    # Expand fixture with multiple categories so aggregation has ≥2 wedges.
+    profile = pd.concat(
+        [
+            profile_a,
+            pd.DataFrame(
+                {
+                    "metric": ["won_contest", "poss_won_att_3rd"],
+                    "title": ["Dribbles/90", "Poss won f3rd"],
+                    "category": ["Possession", "Defending"],
+                    "value": [2.0, 1.0],
+                    "peer_median": [1.0, 0.5],
+                    "percentile": [70.0, 55.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    fig = charts.category_pizza_figure(profile, "A", "peers")
+    kinds = [trace.type for trace in fig.data]
+    assert "barpolar" in kinds and "scatterpolar" in kinds
+    # One value wedge per distinct phase present.
+    assert "Attacking" in [t.name for t in fig.data if t.name]
+
+
 def test_comparison_radar(profile_a, profile_b):
     fig = charts.comparison_radar_figure(profile_a, profile_b, "A", "B")
     assert len(fig.data) == 2
@@ -136,7 +161,7 @@ class TestPlayerCard:
         fig = charts.player_card_figure(
             personal, profile_a, peer_label="63 wingers",
             role_name="Touchline Winger", role_confidence="clear",
-            role_score=82.0, photo_url="https://example.com/p.png",
+            role_score=82.0, photo_url="data:image/png;base64,aaa",
         )
         texts = [a.text for a in fig.layout.annotations]
         assert any("A. Player" in t for t in texts)
@@ -145,6 +170,7 @@ class TestPlayerCard:
         assert any("KEY ATTRIBUTES" in t for t in texts)
         assert any("63 wingers" in t for t in texts)
         assert len(fig.layout.images) == 1  # photo
+        assert fig.layout.images[0].sizing == "contain"
         # bar shapes exist (track + fill per metric, plus column divider)
         assert len(fig.layout.shapes) >= 2 * len(profile_a) + 1
 
