@@ -145,6 +145,71 @@ GROUP_LABELS = {
     "ST": "Striker",
 }
 
+# Wider role families used when comparing beyond the exact position group.
+# Attackers = AM/W/ST; midfield = DM/CM; defence = CB/FB; GK stays alone.
+POSITION_FAMILIES: dict[str, tuple[str, ...]] = {
+    "GK": ("GK",),
+    "CB": ("CB", "FB"),
+    "FB": ("CB", "FB"),
+    "DM": ("DM", "CM"),
+    "CM": ("DM", "CM"),
+    "AM": ("AM", "W", "ST"),
+    "W": ("AM", "W", "ST"),
+    "ST": ("AM", "W", "ST"),
+}
+
+FAMILY_LABELS: dict[str, str] = {
+    "GK": "goalkeepers",
+    "CB": "defenders",
+    "FB": "defenders",
+    "DM": "midfielders",
+    "CM": "midfielders",
+    "AM": "attackers",
+    "W": "attackers",
+    "ST": "attackers",
+}
+
+OUTFIELD_GROUPS: tuple[str, ...] = tuple(g for g in POSITION_GROUPS if g != "GK")
+
+# UI / PeerSpec position-scope tokens.
+POSITION_SCOPES = ("exact", "family", "outfield", "all")
+
+POSITION_SCOPE_LABELS = {
+    "exact": "Exact position",
+    "family": "Wider group",
+    "outfield": "All outfield",
+    "all": "All players",
+}
+
+
+def resolve_position_scope(group: str, scope: str) -> tuple[str, ...] | None:
+    """Return the position groups included for ``scope``, or ``None`` for all.
+
+    ``scope`` is one of :data:`POSITION_SCOPES`. The player's own role template
+    should still be used for metrics even when the peer pool is wider.
+    """
+    if scope not in POSITION_SCOPES:
+        raise ValueError(f"unknown position scope: {scope!r}")
+    if scope == "exact":
+        return (group,)
+    if scope == "family":
+        return POSITION_FAMILIES.get(group, (group,))
+    if scope == "outfield":
+        return OUTFIELD_GROUPS
+    return None  # all players
+
+
+def position_scope_noun(group: str, scope: str) -> str:
+    """Plural noun for peer-count labels, e.g. ``wingers`` / ``attackers``."""
+    if scope == "exact":
+        return GROUP_LABELS.get(group, group).lower() + "s"
+    if scope == "family":
+        return FAMILY_LABELS.get(group, "players")
+    if scope == "outfield":
+        return "outfield players"
+    return "players"
+
+
 # FotMob numeric position ids observed in deep-stats data, mapped to groups.
 # Verified empirically by joining deep-stats rows with squad position labels.
 _POSITION_ID_GROUP: dict[int, str] = {

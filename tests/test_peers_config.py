@@ -82,6 +82,25 @@ class TestRoleTemplates:
                 assert m in config.PLAYER_STAT_TITLES, m
 
 
+class TestPositionFamilies:
+    def test_attacker_family(self):
+        assert config.resolve_position_scope("W", "exact") == ("W",)
+        assert set(config.resolve_position_scope("W", "family")) == {"AM", "W", "ST"}
+        assert set(config.resolve_position_scope("ST", "family")) == {"AM", "W", "ST"}
+        assert config.position_scope_noun("W", "family") == "attackers"
+        assert config.position_scope_noun("W", "exact") == "wingers"
+
+    def test_outfield_and_all(self):
+        outfield = config.resolve_position_scope("CB", "outfield")
+        assert "GK" not in outfield and "ST" in outfield
+        assert config.resolve_position_scope("CB", "all") is None
+        assert config.position_scope_noun("CB", "all") == "players"
+
+    def test_defence_and_midfield_families(self):
+        assert set(config.resolve_position_scope("FB", "family")) == {"CB", "FB"}
+        assert set(config.resolve_position_scope("DM", "family")) == {"DM", "CM"}
+
+
 class TestPeerSpec:
     def test_filters_position_minutes_age(self, striker_pool):
         spec = PeerSpec(
@@ -92,6 +111,19 @@ class TestPeerSpec:
         assert (peers["position_group"] == "ST").all()
         assert (peers["mins_played"] >= 450).all()
         assert peers["age"].between(21, 27).all()
+
+    def test_position_scope_family(self, striker_pool):
+        spec = PeerSpec(
+            position_group="ST", position_scope="family", min_minutes=0,
+        )
+        peers = spec.apply(striker_pool)
+        assert set(peers["position_group"]) <= {"AM", "W", "ST"}
+        assert "W" in set(peers["position_group"])  # fixture includes wingers
+
+    def test_position_scope_all(self, striker_pool):
+        spec = PeerSpec(position_group="ST", position_scope="all", min_minutes=0)
+        peers = spec.apply(striker_pool)
+        assert set(peers["position_group"]) == set(striker_pool["position_group"])
 
     def test_exclude_player(self, striker_pool):
         spec = PeerSpec(position_group="ST", exclude_player_ids={1}, min_minutes=0)
@@ -111,3 +143,10 @@ class TestPeerSpec:
                         include_cross_league=False)
         text = spec.describe()
         assert "Striker" in text and "20-24" in text and "Premier League" in text
+
+    def test_describe_wider_scope(self):
+        spec = PeerSpec(
+            position_group="W", position_scope="family",
+            league_id=87, include_cross_league=False, min_minutes=0,
+        )
+        assert "attackers" in spec.describe()

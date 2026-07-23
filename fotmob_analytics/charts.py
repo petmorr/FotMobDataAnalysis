@@ -53,7 +53,7 @@ def percentile_bar_figure(
     legend, when the profile has a ``category`` column.
     """
     data = _clean(profile).iloc[::-1]  # profile order, top metric first
-    labels = data["title"]
+    labels = [_short_title(t) for t in data["title"]]
     pct = data["percentile"].astype(float)
 
     hover = [
@@ -77,6 +77,7 @@ def percentile_bar_figure(
             marker_color=colors,
             text=[f" {p:.0f}" for p in pct],
             textposition="outside",
+            cliponaxis=False,
             hovertext=hover, hoverinfo="text",
             showlegend=False,
         )
@@ -92,21 +93,43 @@ def percentile_bar_figure(
             marker_color=[_pct_color(p) for p in pct],
             text=[f" {p:.0f}" for p in pct],
             textposition="outside",
+            cliponaxis=False,
             hovertext=hover, hoverinfo="text",
             showlegend=False,
         )
-    fig.add_vline(x=50, line_dash="dot", line_color="#9ca3af",
-                  annotation_text="peer median", annotation_font_size=11)
+    # Median marker: annotation below the axis so it never clips the top bar.
+    fig.add_vline(
+        x=50, line_dash="dot", line_color="#9ca3af",
+        annotation_text="peer median",
+        annotation_position="bottom",
+        annotation_font_size=11,
+        annotation_font_color="#6b7280",
+    )
+    # Legend sits above the plot; x-axis title carries the peer context below.
+    top_margin = 56 if use_category else 24
+    bottom_margin = 64
     fig.update_layout(
-        xaxis=dict(range=[0, 108], title=f"Percentile vs {peer_label}",
-                   gridcolor=GRID, zeroline=False),
-        yaxis=dict(tickfont=dict(size=12)),
+        xaxis=dict(
+            range=[0, 112],
+            title=dict(text=f"Percentile vs {peer_label}", standoff=18),
+            gridcolor=GRID,
+            zeroline=False,
+            fixedrange=True,
+        ),
+        yaxis=dict(tickfont=dict(size=12), automargin=True, fixedrange=True),
         font=FONT,
         plot_bgcolor=PAPER,
         paper_bgcolor=PAPER,
-        margin=dict(l=10, r=30, t=10, b=40),
-        height=max(340, 34 * len(data) + 90),
-        legend=dict(orientation="h", y=-0.12, x=0),
+        margin=dict(l=16, r=48, t=top_margin, b=bottom_margin),
+        height=max(380, 40 * len(data) + top_margin + bottom_margin),
+        legend=dict(
+            orientation="h",
+            y=1.12,
+            x=0,
+            xanchor="left",
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(size=12),
+        ),
         barmode="overlay",
     )
     return fig

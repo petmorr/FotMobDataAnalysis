@@ -39,14 +39,20 @@ class PlayerContext:
 
 @dataclass
 class SeasonProfile:
-    """A player's stats row, same-position league peers and percentile
-    profile for one league season — the base unit of every comparison."""
+    """A player's stats row, league season pool, default same-position peers
+    and percentile profile — the base unit of every comparison.
+
+    ``pool`` is the full league-season table (before position/age filters) so
+    the UI can rebuild peer groups with wider position scopes. ``peers`` and
+    ``profile`` / ``role_score`` default to exact-position league peers.
+    """
 
     row: pd.Series
     peers: pd.DataFrame
     profile: pd.DataFrame
     season: str
     role_score: float | None
+    pool: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 @dataclass
@@ -341,6 +347,7 @@ class PlayerAnalyzer:
         return SeasonProfile(
             row=row,
             peers=peers,
+            pool=pool,
             profile=profile,
             season=str(pool["season"].iloc[0]),
             role_score=metrics.role_score(profile, template.weights),

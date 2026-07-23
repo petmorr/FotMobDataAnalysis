@@ -140,6 +140,62 @@ def score_text(score: float | None) -> str:
     return "—" if score is None else f"{score:.0f} / 100"
 
 
+def position_scope_options(group: str) -> list[tuple[str, str]]:
+    """Radio options for position scope, with a concrete wider-group label."""
+    family = config.FAMILY_LABELS.get(group, "wider group")
+    exact = config.GROUP_LABELS.get(group, group).lower() + "s"
+    return [
+        ("exact", f"Exact position ({exact})"),
+        ("family", f"Wider group ({family})"),
+        ("outfield", "All outfield players"),
+        ("all", "All players in league"),
+    ]
+
+
+def filter_peer_pool(
+    pool: pd.DataFrame,
+    *,
+    player_id: int,
+    position_group: str,
+    position_scope: str,
+    min_minutes: int,
+    age_lo: int | None = None,
+    age_hi: int | None = None,
+) -> pd.DataFrame:
+    """Apply minutes / position-scope / optional age window to a league pool."""
+    if pool.empty:
+        return pool
+    spec = PeerSpec(
+        position_group=position_group,
+        position_scope=position_scope,
+        min_minutes=min_minutes,
+        exclude_player_ids={player_id},
+    )
+    peers = spec.apply(pool)
+    if age_lo is not None and age_hi is not None and "age" in peers.columns:
+        ages = pd.to_numeric(peers["age"], errors="coerce")
+        peers = peers[ages.between(age_lo, age_hi)]
+    return peers.reset_index(drop=True)
+
+
+def peer_count_label(
+    n: int,
+    position_group: str,
+    position_scope: str,
+    *,
+    age_lo: int | None = None,
+    age_hi: int | None = None,
+    league_bit: str | None = None,
+) -> str:
+    noun = config.position_scope_noun(position_group, position_scope)
+    bits = [f"{n} {noun}"]
+    if age_lo is not None and age_hi is not None:
+        bits.append(f"aged {age_lo}-{age_hi}")
+    if league_bit:
+        bits.append(league_bit)
+    return ", ".join(bits)
+
+
 def show_plotly(fig, **kwargs) -> None:
     """st.plotly_chart with a full-width layout across Streamlit versions
     (older releases reject width="stretch", newer ones deprecate
@@ -369,11 +425,11 @@ def render_vs_player(ctx: dict, base: SeasonProfile, min_minutes: int) -> None:
 
 def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int) -> None:
     st.markdown(
-        f"Compare {ctx['name']} against "
-        f"{config.GROUP_LABELS[ctx['position_group']].lower()}s filtered by age "
-        "and league level."
+        f"Compare {ctx['name']} against peers filtered by position scope, age "
+        "and league level. Metrics always use the "
+        f"**{config.GROUP_LABELS[ctx['position_group']].lower()}** template."
     )
-    colA, colB, colC = st.columns([1.3, 1.2, 1])
+    colA, colB, colC = st.columns([1.3, 1.2, 1.1])
     with colA:
         scope = st.radio(
             "League scope",
@@ -385,13 +441,14 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
             ),
         )
     with colB:
-        restrict_age = st.checkbox("Restrict age range", value=True)
+        restrict_age = st.checkbox("Restrict age range", value=True, key="peer_age_on")
         age = ctx.get("age")
         if restrict_age and age:
             lo, hi = st.slider(
                 "Age range", 15, 40,
                 (max(15, age - 3), min(40, age + 3)),
                 help=f"{ctx['name']} is {age}. Default is a sensible ±3 years.",
+                key="peer_age_range",
             )
         else:
             lo, hi = None, None
@@ -402,6 +459,19 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
             help="How far in strength score similar leagues may deviate.",
             disabled=scope != "Similar-level leagues (auto)",
         )
+
+    pos_opts = position_scope_options(ctx["position_group"])
+    pos_scope = st.radio(
+        "Position scope",
+        options=[k for k, _ in pos_opts],
+        format_func=dict(pos_opts).get,
+        horizontal=True,
+        key="peer_pos_scope",
+        help=(
+            "Exact = same position group. Wider group expands to the natural "
+            "family (e.g. wingers → attackers). Outfield / all ignore position."
+        ),
+    )
 
     if scope == "Same league":
         league_ids: list[int] = [ctx["league_id"]]
@@ -419,7 +489,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         names = [config.LEAGUES[i].name for i in league_ids if i in config.LEAGUES]
         st.caption("Leagues in pool: " + ", ".join(names))
 
-    run_key = (ctx["player_id"], tuple(league_ids), lo, hi, min_minutes)
+    run_key = (ctx["player_id"], tuple(league_ids), lo, hi, min_minutes, pos_scope)
     if st.button("Build comparison", type="primary"):
         st.session_state["peer_run"] = run_key
     if st.session_state.get("peer_run") != run_key:
@@ -431,19 +501,19 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         st.error("No data found for the selected leagues.")
         return
 
-    spec = PeerSpec(
+    peers = filter_peer_pool(
+        pool,
+        player_id=ctx["player_id"],
         position_group=ctx["position_group"],
+        position_scope=pos_scope,
         min_minutes=min_minutes,
-        exclude_player_ids={ctx["player_id"]},
+        age_lo=lo,
+        age_hi=hi,
     )
-    peers = spec.apply(pool)
-    if lo is not None:  # exact slider range (PeerSpec bands are symmetric)
-        ages = pd.to_numeric(peers["age"], errors="coerce")
-        peers = peers[ages.between(lo, hi)]
     if len(peers) < 5:
         st.warning(
             f"Only {len(peers)} peers match — widen the age range, lower the "
-            "minutes floor or add leagues for a more reliable comparison."
+            "minutes floor, broaden the position scope or add leagues."
         )
     if peers.empty:
         return
@@ -451,18 +521,18 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
     group_profile = metrics.percentile_profile(base.row, peers, template.metrics)
     group_score = metrics.role_score(group_profile, template.weights)
 
-    desc_bits = [f"{len(peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s"]
-    if lo is not None:
-        desc_bits.append(f"aged {lo}-{hi}")
-    desc_bits.append(f"{len(league_ids)} league(s)")
-    desc = ", ".join(desc_bits)
+    desc = peer_count_label(
+        len(peers), ctx["position_group"], pos_scope,
+        age_lo=lo, age_hi=hi,
+        league_bit=f"{len(league_ids)} league(s)",
+    )
 
     group_role = role_profile(ctx, base.season)
     render_player_card(
         ctx, base, group_profile, peer_label=desc,
         role=group_role, score=group_score,
     )
-    show_plotly(percentile_bar_figure(group_profile, desc))
+    show_plotly(percentile_bar_figure(group_profile, desc, color_by="category"))
 
     col_s, col_w = st.columns(2)
     g_str, g_weak = metrics.strengths_and_weaknesses(group_profile)
@@ -506,9 +576,9 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
 st.title("⚽ FotMob Analytics")
 st.caption(
     "Search a player, analyse their season, then compare them with another "
-    "player or an automatically built peer group — same position, sensible age "
-    "range, same league or similar-level leagues ranked by UEFA coefficients "
-    "and Opta Power Rankings."
+    "player or an automatically built peer group — choose position scope and "
+    "age range, same league or similar-level leagues ranked by UEFA "
+    "coefficients and Opta Power Rankings."
 )
 
 with st.sidebar:
@@ -548,11 +618,78 @@ with st.spinner("Classifying role type..."):
     role = role_profile(ctx, base.season)
 player_header(ctx, base.season, role)
 
+# ---- Peer comparison controls (own league) ---------------------------------
+st.subheader("Comparison group")
+st.caption(
+    "Percentiles and role score below are vs this group. Metrics always use "
+    f"the **{config.GROUP_LABELS[ctx['position_group']].lower()}** template even "
+    "when the pool is wider."
+)
+fc1, fc2 = st.columns([1.6, 1.2])
+with fc1:
+    pos_opts = position_scope_options(ctx["position_group"])
+    season_pos_scope = st.radio(
+        "Position scope",
+        options=[k for k, _ in pos_opts],
+        format_func=dict(pos_opts).get,
+        horizontal=True,
+        key="season_pos_scope",
+        help=(
+            "Exact position (e.g. wingers only), wider family (e.g. all "
+            "attackers), all outfield players, or the entire league."
+        ),
+    )
+with fc2:
+    season_age_on = st.checkbox(
+        "Restrict age range", value=False, key="season_age_on",
+        help="Off = all ages. On = same style of age window as peer-group compare.",
+    )
+    age = ctx.get("age")
+    if season_age_on and age:
+        season_age_lo, season_age_hi = st.slider(
+            "Age range", 15, 40,
+            (max(15, age - 3), min(40, age + 3)),
+            help=f"{ctx['name']} is {age}. Default ±3 years.",
+            key="season_age_range",
+        )
+    else:
+        season_age_lo, season_age_hi = None, None
+
+league_pool = base.pool if not getattr(base, "pool", pd.DataFrame()).empty else base.peers
+cmp_peers = filter_peer_pool(
+    league_pool,
+    player_id=ctx["player_id"],
+    position_group=ctx["position_group"],
+    position_scope=season_pos_scope,
+    min_minutes=min_minutes,
+    age_lo=season_age_lo,
+    age_hi=season_age_hi,
+)
+if cmp_peers.empty:
+    st.warning(
+        "No peers match these filters — widen the age range, lower the minutes "
+        "floor, or broaden the position scope."
+    )
+    st.stop()
+
+cmp_profile = metrics.percentile_profile(base.row, cmp_peers, template.metrics)
+cmp_score = metrics.role_score(cmp_profile, template.weights)
+peer_label = peer_count_label(
+    len(cmp_peers), ctx["position_group"], season_pos_scope,
+    age_lo=season_age_lo, age_hi=season_age_hi,
+    league_bit=f"in {ctx['league_name']}",
+)
+if len(cmp_peers) < 5:
+    st.warning(
+        f"Only {len(cmp_peers)} peers match — percentiles can be noisy with "
+        "such a small group."
+    )
+
 # KPI cards (headline numbers before any charts)
 mins = base.row.get("mins_played")
 kpis = st.columns(5)
-kpis[0].metric("Role score", score_text(base.role_score),
-               help="Weighted percentile average vs league position peers.")
+kpis[0].metric("Role score", score_text(cmp_score),
+               help="Weighted percentile average vs the selected comparison group.")
 kpis[1].metric("FotMob rating", f"{base.row.get('rating'):.2f}"
                if pd.notna(base.row.get("rating")) else "—")
 kpis[2].metric("Goals", int(base.row.get("goals"))
@@ -566,22 +703,19 @@ if pd.notna(mins) and mins < 900:
         "percentiles can be noisy below ~900 minutes."
     )
 
-peer_label = (
-    f"{len(base.peers)} {config.GROUP_LABELS[ctx['position_group']].lower()}s "
-    f"in {ctx['league_name']}"
-)
 c1, c2 = st.columns([3, 2])
 with c1:
     st.subheader("Percentile profile")
-    show_plotly(percentile_bar_figure(base.profile, peer_label, color_by="category"))
+    st.caption(peer_label)
+    show_plotly(percentile_bar_figure(cmp_profile, peer_label, color_by="category"))
     profile_download(
-        base.profile, f"profile_{ctx['player_id']}.csv", "Download profile (CSV)"
+        cmp_profile, f"profile_{ctx['player_id']}.csv", "Download profile (CSV)"
     )
 with c2:
     st.subheader("Overview")
     st.caption(f"{ctx['name']} — percentile rank vs {peer_label}")
-    show_plotly(pizza_figure(base.profile, ctx["name"], peer_label))
-    strengths_weaknesses_lists(base.profile)
+    show_plotly(pizza_figure(cmp_profile, ctx["name"], peer_label))
+    strengths_weaknesses_lists(cmp_profile)
 
 # ---- Section 2b: role profile and in-depth stats ---------------------------
 

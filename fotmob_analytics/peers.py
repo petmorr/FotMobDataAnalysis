@@ -5,6 +5,7 @@ enough minutes)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Sequence
 
 import pandas as pd
 
@@ -17,9 +18,16 @@ class PeerSpec:
 
     ``age_band`` is the +/- range around the target player's age. ``tier_spread``
     of 0 means only leagues in the same strength tier; 1 adds adjacent tiers.
+
+    Position filtering accepts either a single ``position_group`` or an explicit
+    ``position_groups`` tuple (wider family / outfield). When both are set,
+    ``position_groups`` wins. Pass ``position_scope`` to resolve groups from
+    :func:`config.resolve_position_scope`.
     """
 
     position_group: str | None = None
+    position_groups: Sequence[str] | None = None
+    position_scope: str | None = None
     age: int | None = None
     age_band: int = 3
     league_id: int | None = None
@@ -27,6 +35,16 @@ class PeerSpec:
     min_minutes: int = 450
     include_cross_league: bool = True
     exclude_player_ids: set[int] = field(default_factory=set)
+
+    def resolved_position_groups(self) -> tuple[str, ...] | None:
+        """Position groups to keep, or ``None`` to keep every position."""
+        if self.position_groups is not None:
+            return tuple(self.position_groups)
+        if self.position_scope and self.position_group:
+            return config.resolve_position_scope(self.position_group, self.position_scope)
+        if self.position_group:
+            return (self.position_group,)
+        return None
 
     def league_ids(self) -> list[int]:
         """All leagues that should be in the peer pool."""
@@ -41,8 +59,9 @@ class PeerSpec:
         df = pool
         if df.empty:
             return df
-        if self.position_group:
-            df = df[df["position_group"] == self.position_group]
+        groups = self.resolved_position_groups()
+        if groups is not None:
+            df = df[df["position_group"].isin(groups)]
         if self.min_minutes and "mins_played" in df.columns:
             df = df[df["mins_played"].fillna(0) >= self.min_minutes]
         if self.age is not None and "age" in df.columns:
@@ -56,8 +75,14 @@ class PeerSpec:
 
     def describe(self) -> str:
         parts = []
-        if self.position_group:
-            parts.append(config.GROUP_LABELS.get(self.position_group, self.position_group) + "s")
+        groups = self.resolved_position_groups()
+        if self.position_scope and self.position_group:
+            parts.append(config.position_scope_noun(self.position_group, self.position_scope))
+        elif groups is not None and len(groups) == 1:
+            g = groups[0]
+            parts.append(config.GROUP_LABELS.get(g, g) + "s")
+        elif groups is not None:
+            parts.append(" / ".join(config.GROUP_LABELS.get(g, g) for g in groups))
         if self.age is not None:
             parts.append(f"aged {max(self.age - self.age_band, 15)}-{self.age + self.age_band}")
         leagues = self.league_ids()

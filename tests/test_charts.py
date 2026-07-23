@@ -32,6 +32,19 @@ def test_percentile_bar_figure(profile_a):
     fig = charts.percentile_bar_figure(profile_a, "peers")
     assert len(fig.data) == 1
     assert list(fig.data[0].x) == [75.0, 88.0, 92.0]  # reversed order
+    # Short y labels + room for legend / axis title (no overlap layout).
+    assert fig.layout.yaxis.automargin is True
+    assert fig.layout.margin.b >= 50
+    assert fig.layout.margin.t >= 20
+
+
+def test_percentile_bar_category_legend_above(profile_a):
+    fig = charts.percentile_bar_figure(profile_a, "18 wingers", color_by="category")
+    assert fig.layout.legend.y >= 1.0
+    assert fig.layout.margin.t >= 50
+    # Long titles are shortened on the axis; full title stays in hover.
+    assert "Poss. won" not in list(fig.data[0].y)  # fixture has no such metric
+    assert any("Goals/90" == y or "Goals" in str(y) for y in fig.data[0].y)
 
 
 def test_comparison_figure(profile_a, profile_b):
