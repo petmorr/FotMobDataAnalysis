@@ -551,7 +551,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
     )
     show_plotly(percentile_bar_figure(group_profile, desc, color_by="category"))
     try:
-        show_plotly(category_pizza_figure(ctx["name"], desc))
+        show_plotly(category_pizza_figure(group_profile, ctx["name"], desc))
         st.caption(
             "Phase-of-play pizza: each wedge is the mean percentile of that "
             "category's metrics."
