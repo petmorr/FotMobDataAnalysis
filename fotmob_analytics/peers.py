@@ -67,8 +67,9 @@ class PeerSpec:
         if self.age is not None and "age" in df.columns:
             ages = pd.to_numeric(df["age"], errors="coerce")
             in_band = (ages - self.age).abs() <= self.age_band
-            # Keep players with unknown age out of an age-restricted pool.
-            df = df[in_band.fillna(False)]
+            # Keep unknown ages — dropping them silently shrinks peer pools
+            # whenever squad enrichment misses a player (transfers, relegations).
+            df = df[in_band.fillna(True)]
         if self.exclude_player_ids:
             df = df[~df["player_id"].isin(self.exclude_player_ids)]
         return df.reset_index(drop=True)

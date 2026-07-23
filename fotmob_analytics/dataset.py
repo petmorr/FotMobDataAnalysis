@@ -95,18 +95,26 @@ class DatasetBuilder:
         league = config.LEAGUES.get(league_id)
         df["league"] = league.name if league else str(league_id)
         df["league_tier"] = league.tier if league else None
-        df["position_group"] = df["position_id"].map(config.position_group_from_id)
+        from_id = df["position_id"].map(config.position_group_from_id)
         _add_derived_per90(df)
 
-        squad_info = self._league_squad_info(league_id)
+        # Enrich from the squads of teams that actually appear in this season's
+        # stats — not the live league table, which can already be next season
+        # (promotions/relegations) and would leave ages blank for half the pool.
+        team_ids = sorted(
+            {int(t) for t in df["team_id"].dropna().unique()}
+        )
+        squad_info = self._league_squad_info(league_id, team_ids=team_ids)
         if progress:
             progress("squads fetched", 0.95)
         if not squad_info.empty:
             df = df.merge(squad_info, on="player_id", how="left")
-            # Squad position labels are more precise than the deep-stats grid id.
-            fallback = df["position_label"].map(_group_from_label)
-            df["position_group"] = df["position_group"].fillna(fallback)
+            # Squad primary labels are more precise than the deep-stats grid id
+            # (wide mids often land in the CM band). Prefer the label when set.
+            from_label = df["position_label"].map(_group_from_label)
+            df["position_group"] = from_label.fillna(from_id)
         else:
+            df["position_group"] = from_id
             for col in ("age", "height", "country", "market_value", "team", "position_label"):
                 df[col] = None
 
@@ -150,17 +158,25 @@ class DatasetBuilder:
             return pd.DataFrame()
         return concat_frames(frames)
 
-    def _league_squad_info(self, league_id: int) -> pd.DataFrame:
-        """Age/height/nationality/market value for every squad member of every
-        team currently in the league."""
-        try:
-            league = self.client.league(league_id)
-            tables = league.get("table") or []
-            team_entries = tables[0]["data"]["table"]["all"] if tables else []
-        except (FotMobError, KeyError, IndexError, TypeError):
-            team_entries = []
+    def _league_squad_info(
+        self, league_id: int, team_ids: Sequence[int] | None = None
+    ) -> pd.DataFrame:
+        """Age/height/nationality/market value for squad members of ``team_ids``.
 
-        team_ids = [entry["id"] for entry in team_entries if entry.get("id")]
+        When ``team_ids`` is omitted, falls back to the live league table (which
+        may already be the *next* season early in the summer). Prefer passing
+        the team ids observed in the season's deep-stats rows.
+        """
+        if team_ids is None:
+            try:
+                league = self.client.league(league_id)
+                tables = league.get("table") or []
+                team_entries = tables[0]["data"]["table"]["all"] if tables else []
+            except (FotMobError, KeyError, IndexError, TypeError):
+                team_entries = []
+            team_ids = [entry["id"] for entry in team_entries if entry.get("id")]
+        else:
+            team_ids = [int(t) for t in team_ids]
 
         def fetch(team_id: int) -> list[dict]:
             try:

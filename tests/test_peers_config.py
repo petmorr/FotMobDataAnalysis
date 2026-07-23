@@ -1,3 +1,5 @@
+import pandas as pd
+
 from fotmob_analytics import config
 from fotmob_analytics.dataset import _group_from_label
 from fotmob_analytics.peers import PeerSpec
@@ -12,6 +14,8 @@ class TestPositionMapping:
         assert config.position_group_from_id(75) == "CM"
         assert config.position_group_from_id(85) == "AM"
         assert config.position_group_from_id(83) == "W"
+        assert config.position_group_from_id(71) == "W"
+        assert config.position_group_from_id(79) == "W"
         assert config.position_group_from_id(115) == "ST"
 
     def test_band_fallback_for_unknown_id(self):
@@ -110,7 +114,23 @@ class TestPeerSpec:
         peers = spec.apply(striker_pool)
         assert (peers["position_group"] == "ST").all()
         assert (peers["mins_played"] >= 450).all()
-        assert peers["age"].between(21, 27).all()
+        # Known ages must sit in the band; unknown ages are kept.
+        known = peers["age"].notna()
+        assert peers.loc[known, "age"].between(21, 27).all()
+
+    def test_age_filter_keeps_unknown_ages(self, striker_pool):
+        pool = striker_pool.copy()
+        pool["age"] = pd.to_numeric(pool["age"], errors="coerce").astype("Float64")
+        pool.loc[pool["player_id"] == 1, "age"] = pd.NA
+        pool.loc[pool["player_id"] == 1, "position_group"] = "ST"
+        pool.loc[pool["player_id"] == 1, "mins_played"] = 2000
+        spec = PeerSpec(position_group="ST", age=24, age_band=1, min_minutes=0)
+        peers = spec.apply(pool)
+        assert 1 in set(peers["player_id"])
+        # Still excludes known ages outside the band.
+        pool.loc[pool["player_id"] == 2, "age"] = 40
+        peers = spec.apply(pool)
+        assert 2 not in set(peers["player_id"])
 
     def test_position_scope_family(self, striker_pool):
         spec = PeerSpec(

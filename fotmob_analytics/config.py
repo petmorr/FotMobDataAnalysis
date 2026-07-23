@@ -217,7 +217,8 @@ _POSITION_ID_GROUP: dict[int, str] = {
     32: "FB", 38: "FB", 62: "FB", 68: "FB",
     33: "CB", 34: "CB", 35: "CB", 36: "CB", 37: "CB",
     63: "DM", 64: "DM", 65: "DM", 66: "DM", 67: "DM",
-    72: "W", 78: "W",
+    # Wide midfield / wing slots in the 70s band (not central CM).
+    71: "W", 72: "W", 78: "W", 79: "W",
     73: "CM", 74: "CM", 75: "CM", 76: "CM", 77: "CM",
     82: "W", 83: "W", 87: "W", 88: "W", 102: "W", 103: "W", 107: "W", 108: "W",
     84: "AM", 85: "AM", 86: "AM",
@@ -257,6 +258,9 @@ def position_group_from_id(position_id: int | float | None) -> str | None:
     if 60 <= pid <= 69:
         return "DM"
     if 70 <= pid <= 79:
+        # 71/79 are wide; 72/78 already mapped. Remaining 70s → CM.
+        if pid in (71, 72, 78, 79):
+            return "W"
         return "CM"
     if 80 <= pid <= 89:
         return "AM"

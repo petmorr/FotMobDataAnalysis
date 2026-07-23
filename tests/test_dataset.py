@@ -16,6 +16,10 @@ class FakeClient:
                  "statValue": {"value": 2700}},
                 {"id": 2, "teamId": 11, "name": "Beta", "position": 83,
                  "statValue": {"value": 1800}},
+                # Wide midfielder: deep-stats id sits in the CM band, but the
+                # squad primary label is LM → should classify as W.
+                {"id": 3, "teamId": 10, "name": "Gamma", "position": 75,
+                 "statValue": {"value": 2000}},
             ],
             "goals": [
                 {"id": 1, "teamId": 10, "name": "Alpha", "position": 115,
@@ -26,6 +30,8 @@ class FakeClient:
                  "statValue": {"value": 7.5}},
                 {"id": 2, "teamId": 11, "name": "Beta", "position": 83,
                  "statValue": {"value": 7.1}},
+                {"id": 3, "teamId": 10, "name": "Gamma", "position": 75,
+                 "statValue": {"value": 6.9}},
             ],
             "big_chance_created": [
                 {"id": 1, "teamId": 10, "name": "Alpha", "position": 115,
@@ -63,8 +69,12 @@ class FakeClient:
 
     def team(self, team_id):
         members = {
-            10: [{"id": 1, "name": "Alpha", "age": 23, "height": 188,
-                  "cname": "Norway", "transferValue": 5e7, "positionIdsDesc": "ST"}],
+            10: [
+                {"id": 1, "name": "Alpha", "age": 23, "height": 188,
+                 "cname": "Norway", "transferValue": 5e7, "positionIdsDesc": "ST"},
+                {"id": 3, "name": "Gamma", "age": 27, "height": 178,
+                 "cname": "Spain", "transferValue": 1e7, "positionIdsDesc": "LM,RW"},
+            ],
             11: [{"id": 2, "name": "Beta", "age": 29, "height": 175,
                   "cname": "Spain", "transferValue": 2e7, "positionIdsDesc": "RW,LW"}],
         }[team_id]
@@ -82,7 +92,7 @@ class TestLeaguePlayerTable:
     def test_pivot_and_enrichment(self):
         builder = DatasetBuilder(FakeClient())
         df = builder.league_player_table(47, stats=["mins_played", "goals", "rating"])
-        assert len(df) == 2
+        assert len(df) == 3
         alpha = df[df["player_id"] == 1].iloc[0]
         assert alpha["mins_played"] == 2700
         assert alpha["goals"] == 20
@@ -93,6 +103,17 @@ class TestLeaguePlayerTable:
         beta = df[df["player_id"] == 2].iloc[0]
         assert beta["position_group"] == "W"
         assert pd.isna(beta["goals"])
+        # Squad label LM beats deep-stats CM-band id.
+        gamma = df[df["player_id"] == 3].iloc[0]
+        assert gamma["position_group"] == "W"
+        assert gamma["age"] == 27
+
+    def test_squad_info_honours_explicit_team_ids(self):
+        builder = DatasetBuilder(FakeClient())
+        info = builder._league_squad_info(47, team_ids=[10])
+        assert set(info["player_id"]) == {1, 3}
+        # Team 11 is not requested, so Beta is absent.
+        assert 2 not in set(info["player_id"])
 
     def test_derived_per90_columns(self):
         builder = DatasetBuilder(FakeClient())
@@ -111,7 +132,7 @@ class TestLeaguePlayerTable:
         builder = DatasetBuilder(FakeClient())
         df = builder.multi_league_player_table([47, 87], stats=["mins_played"])
         assert set(df["league_id"]) == {47, 87}
-        assert len(df) == 4
+        assert len(df) == 6
 
 
 class TestLeagueTeamTable:

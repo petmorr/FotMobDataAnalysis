@@ -174,7 +174,8 @@ def filter_peer_pool(
     peers = spec.apply(pool)
     if age_lo is not None and age_hi is not None and "age" in peers.columns:
         ages = pd.to_numeric(peers["age"], errors="coerce")
-        peers = peers[ages.between(age_lo, age_hi)]
+        # Keep unknown ages so missing squad metadata doesn't shrink the sample.
+        peers = peers[ages.between(age_lo, age_hi) | ages.isna()]
     return peers.reset_index(drop=True)
 
 
@@ -186,6 +187,7 @@ def peer_count_label(
     age_lo: int | None = None,
     age_hi: int | None = None,
     league_bit: str | None = None,
+    min_minutes: int | None = None,
 ) -> str:
     noun = config.position_scope_noun(position_group, position_scope)
     bits = [f"{n} {noun}"]
@@ -193,6 +195,8 @@ def peer_count_label(
         bits.append(f"aged {age_lo}-{age_hi}")
     if league_bit:
         bits.append(league_bit)
+    if min_minutes:
+        bits.append(f"{min_minutes}+ mins")
     return ", ".join(bits)
 
 
@@ -441,7 +445,10 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
             ),
         )
     with colB:
-        restrict_age = st.checkbox("Restrict age range", value=True, key="peer_age_on")
+        restrict_age = st.checkbox(
+            "Restrict age range", value=False, key="peer_age_on",
+            help="Off (default) = all ages. On = ± band around the player's age.",
+        )
         age = ctx.get("age")
         if restrict_age and age:
             lo, hi = st.slider(
@@ -525,6 +532,7 @@ def render_peer_group(ctx: dict, base: SeasonProfile, template, min_minutes: int
         len(peers), ctx["position_group"], pos_scope,
         age_lo=lo, age_hi=hi,
         league_bit=f"{len(league_ids)} league(s)",
+        min_minutes=min_minutes,
     )
 
     group_role = role_profile(ctx, base.season)
@@ -587,7 +595,11 @@ with st.sidebar:
     st.divider()
     min_minutes = st.slider(
         "Minimum minutes for peers", 0, 2000, 450, step=90,
-        help="Players below this minutes total are excluded from peer pools.",
+        help=(
+            "Players below this minutes total are excluded from peer pools. "
+            "Default 450 ≈ five full matches. Raising this toward 2000 will "
+            "shrink a 20-team league's winger pool to ~20 players."
+        ),
     )
     st.caption(
         "Data: FotMob, cached 6 hours. First load of a league takes a few "
@@ -678,7 +690,29 @@ peer_label = peer_count_label(
     len(cmp_peers), ctx["position_group"], season_pos_scope,
     age_lo=season_age_lo, age_hi=season_age_hi,
     league_bit=f"in {ctx['league_name']}",
+    min_minutes=min_minutes,
 )
+# Show the pre-age pool size so a tight age band isn't mistaken for "all
+# wingers in the league".
+unaged = filter_peer_pool(
+    league_pool,
+    player_id=ctx["player_id"],
+    position_group=ctx["position_group"],
+    position_scope=season_pos_scope,
+    min_minutes=min_minutes,
+)
+if season_age_lo is not None and len(unaged) != len(cmp_peers):
+    st.caption(
+        f"Sample: **{len(cmp_peers)}** after age filter "
+        f"(**{len(unaged)}** {config.position_scope_noun(ctx['position_group'], season_pos_scope)} "
+        f"with {min_minutes}+ minutes before age filter)."
+    )
+elif len(cmp_peers) < 25 and season_pos_scope == "exact":
+    st.caption(
+        f"Sample: **{len(cmp_peers)}** {config.position_scope_noun(ctx['position_group'], season_pos_scope)} "
+        f"with {min_minutes}+ minutes. Lower the sidebar minutes floor or widen "
+        "the position scope if this looks too small."
+    )
 if len(cmp_peers) < 5:
     st.warning(
         f"Only {len(cmp_peers)} peers match — percentiles can be noisy with "
